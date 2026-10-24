@@ -520,6 +520,8 @@ class BackupPage extends StatelessWidget {
     try {
       final picked = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['db'], withData: false);
       if (picked == null || picked.files.single.path == null) return;
+      // Vérifier que la page existe encore après l'opération asynchrone.
+      if (!context.mounted) return;
       final confirm = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: const Text('Restaurer une sauvegarde ?'), content: const Text('Cette opération remplace la base locale actuelle. Exportez d’abord une copie de sécurité.'), actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuler')),
         FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Restaurer')),
