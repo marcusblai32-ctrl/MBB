@@ -1,8 +1,5 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
-import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -273,32 +270,146 @@ class _MembersPageState extends State<MembersPage> {
   );
 }
 
-class FamiliesPage extends StatefulWidget { const FamiliesPage({super.key}); @override State<FamiliesPage> createState() => _FamiliesPageState(); }
-class _FamiliesPageState extends State<FamiliesPage> {
-  Future<void> add() async => showFormDialog(context, 'Ajouter une famille', const [
-    FieldSpec('name', 'Nom de la famille', required: true), FieldSpec('address', 'Adresse'), FieldSpec('notes', 'Notes'),
-  ], (v) async { await AppDatabase.instance.insert('families', {...v, 'created_at': nowIso()}); await AppDatabase.instance.log('CREATE_FAMILY', v['name'] ?? ''); if (mounted) setState(() {}); });
+
+class FamiliesPage extends StatefulWidget {
+  const FamiliesPage({super.key});
   @override
-  Widget build(BuildContext context) => Scaffold(backgroundColor: Colors.transparent, floatingActionButton: FloatingActionButton.extended(onPressed: add, icon: const Icon(Icons.add), label: const Text('Ajouter famille')),
-    body: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('families', orderBy: 'name'), builder: (context, snap) {
-      if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-      if (snap.data!.isEmpty) return const Center(child: Text('Aucune famille enregistrée.'));
-      return ListView(padding: const EdgeInsets.all(12), children: snap.data!.map((r) => Card(child: ListTile(leading: const Icon(Icons.family_restroom, color: teal), title: Text('${r['name']}'), subtitle: Text('${r['address']}'), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { if (await confirmDelete(context, '${r['name']}')) { await AppDatabase.instance.delete('families', where: 'id = ?', whereArgs: [r['id']]); if (mounted) setState(() {}); } }))).toList());
-    }));
+  State<FamiliesPage> createState() => _FamiliesPageState();
 }
 
-class ServicesPage extends StatefulWidget { const ServicesPage({super.key}); @override State<ServicesPage> createState() => _ServicesPageState(); }
-class _ServicesPageState extends State<ServicesPage> {
-  Future<void> add() async => showFormDialog(context, 'Ajouter un culte ou une réunion', [
-    const FieldSpec('title', 'Nom du service', required: true), FieldSpec('service_date', 'Date (AAAA-MM-JJ)', required: true, initial: today()), const FieldSpec('notes', 'Notes'),
-  ], (v) async { await AppDatabase.instance.insert('services', v); await AppDatabase.instance.log('CREATE_SERVICE', v['title'] ?? ''); if (mounted) setState(() {}); });
+class _FamiliesPageState extends State<FamiliesPage> {
+  Future<void> add() async {
+    await showFormDialog(context, 'Ajouter une famille', const [
+      FieldSpec('name', 'Nom de la famille', required: true),
+      FieldSpec('address', 'Adresse'),
+      FieldSpec('notes', 'Notes'),
+    ], (v) async {
+      await AppDatabase.instance.insert('families', {
+        ...v,
+        'created_at': nowIso(),
+      });
+      await AppDatabase.instance.log('CREATE_FAMILY', v['name'] ?? '');
+      if (mounted) setState(() {});
+    });
+  }
+
   @override
-  Widget build(BuildContext context) => Scaffold(backgroundColor: Colors.transparent, floatingActionButton: FloatingActionButton.extended(onPressed: add, icon: const Icon(Icons.add), label: const Text('Ajouter service')),
-    body: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('services', orderBy: 'service_date DESC'), builder: (context, snap) {
-      if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-      if (snap.data!.isEmpty) return const Center(child: Text('Aucun culte ou réunion enregistré.'));
-      return ListView(padding: const EdgeInsets.all(12), children: snap.data!.map((r) => Card(child: ListTile(leading: const Icon(Icons.church, color: navy), title: Text('${r['title']}'), subtitle: Text('${r['service_date']} — ${r['notes']}'), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { if (await confirmDelete(context, '${r['title']}')) { await AppDatabase.instance.delete('services', where: 'id = ?', whereArgs: [r['id']]); if (mounted) setState(() {}); } }))).toList());
-    }));
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: add,
+        icon: const Icon(Icons.add),
+        label: const Text('Ajouter famille'),
+      ),
+      body: FutureBuilder<List<Map<String, Object?>>>(
+        future: AppDatabase.instance.query('families', orderBy: 'name'),
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final rows = snap.data!;
+          if (rows.isEmpty) {
+            return const Center(child: Text('Aucune famille enregistrée.'));
+          }
+          return ListView(
+            padding: const EdgeInsets.all(12),
+            children: rows.map((r) {
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.family_restroom, color: teal),
+                  title: Text('${r['name']}'),
+                  subtitle: Text('${r['address']}'),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      final confirmed = await confirmDelete(context, '${r['name']}');
+                      if (!confirmed) return;
+                      await AppDatabase.instance.delete(
+                        'families',
+                        where: 'id = ?',
+                        whereArgs: [r['id']],
+                      );
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class ServicesPage extends StatefulWidget {
+  const ServicesPage({super.key});
+  @override
+  State<ServicesPage> createState() => _ServicesPageState();
+}
+
+class _ServicesPageState extends State<ServicesPage> {
+  Future<void> add() async {
+    await showFormDialog(context, 'Ajouter un culte ou une réunion', [
+      const FieldSpec('title', 'Nom du service', required: true),
+      FieldSpec('service_date', 'Date (AAAA-MM-JJ)', required: true, initial: today()),
+      const FieldSpec('notes', 'Notes'),
+    ], (v) async {
+      await AppDatabase.instance.insert('services', v);
+      await AppDatabase.instance.log('CREATE_SERVICE', v['title'] ?? '');
+      if (mounted) setState(() {});
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: add,
+        icon: const Icon(Icons.add),
+        label: const Text('Ajouter service'),
+      ),
+      body: FutureBuilder<List<Map<String, Object?>>>(
+        future: AppDatabase.instance.query('services', orderBy: 'service_date DESC'),
+        builder: (context, snap) {
+          if (!snap.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final rows = snap.data!;
+          if (rows.isEmpty) {
+            return const Center(child: Text('Aucun culte ou réunion enregistré.'));
+          }
+          return ListView(
+            padding: const EdgeInsets.all(12),
+            children: rows.map((r) {
+              return Card(
+                child: ListTile(
+                  leading: const Icon(Icons.church, color: navy),
+                  title: Text('${r['title']}'),
+                  subtitle: Text("${r['service_date']} — ${r['notes']}"),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      final confirmed = await confirmDelete(context, '${r['title']}');
+                      if (!confirmed) return;
+                      await AppDatabase.instance.delete(
+                        'services',
+                        where: 'id = ?',
+                        whereArgs: [r['id']],
+                      );
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
 }
 
 class AttendancePage extends StatefulWidget { const AttendancePage({super.key}); @override State<AttendancePage> createState() => _AttendancePageState(); }
@@ -387,7 +498,7 @@ class _SettingsPageState extends State<SettingsPage> {
     const SizedBox(height: 16),
     TextField(controller: church, decoration: const InputDecoration(labelText: 'Nom de l’église')),
     const SizedBox(height: 12), TextField(controller: app, decoration: const InputDecoration(labelText: 'Nom de l’application affiché dans les paramètres')),
-    const SizedBox(height: 12), DropdownButtonFormField<String>(value: language, decoration: const InputDecoration(labelText: 'Langue de l’interface'), items: const [DropdownMenuItem(value: 'Français', child: Text('Français')), DropdownMenuItem(value: 'Kreyòl ayisyen', child: Text('Kreyòl ayisyen'))], onChanged: (v) { if (v != null) setState(() => language = v); }),
+    const SizedBox(height: 12), DropdownButtonFormField<String>(initialValue: language, decoration: const InputDecoration(labelText: 'Langue de l’interface'), items: const [DropdownMenuItem(value: 'Français', child: Text('Français')), DropdownMenuItem(value: 'Kreyòl ayisyen', child: Text('Kreyòl ayisyen'))], onChanged: (v) { if (v != null) setState(() => language = v); }),
     const SizedBox(height: 16), FilledButton.icon(onPressed: _save, icon: const Icon(Icons.save), label: const Text('Enregistrer')),
     const SizedBox(height: 12), const Card(child: ListTile(leading: Icon(Icons.info_outline), title: Text('Base de données locale'), subtitle: Text('SQLite est stockée dans le dossier privé de l’application. Désinstaller l’application peut supprimer les données locales : faites des sauvegardes régulièrement.'))),
   ]);
@@ -419,7 +530,7 @@ class BackupPage extends StatelessWidget {
       final db = await AppDatabase.instance.database;
       await db.close();
       await source.copy(destination);
-      if (context.mounted) showMessage(context, 'Base restaurée. Fermez puis rouvrez MBB pour recharger les données.');
+      if (context.mounted) { showMessage(context, 'Base restaurée. Fermez puis rouvrez MBB pour recharger les données.'); }
     } catch (e) { if (context.mounted) showMessage(context, 'Échec de la restauration : $e'); }
   }
   Future<void> _shareAudit(BuildContext context) async {
@@ -429,7 +540,7 @@ class BackupPage extends StatelessWidget {
     final dir = await getTemporaryDirectory();
     final file = File(p.join(dir.path, 'MBB_historique.csv'));
     await file.writeAsString(csv.toString());
-    await Share.shareXFiles([XFile(file.path)], text: 'Historique MBB');
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Historique MBB'));
   }
   @override
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(18), children: [
