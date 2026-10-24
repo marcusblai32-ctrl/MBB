@@ -647,7 +647,7 @@ class BackupPage extends StatelessWidget {
     final dir = await getTemporaryDirectory();
     final file = File(p.join(dir.path, 'MBB_historique.csv'));
     await file.writeAsString(csv.toString());
-    await Share.shareXFiles([XFile(file.path)], text: 'Historique MBB');
+    await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Historique MBB'));
   }
   @override
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(18), children: [
