@@ -22,9 +22,71 @@ class AppDatabase {
     final path = p.join(dir.path, 'mbb_database.db');
     _db = await openDatabase(
       path,
-      version: 1,
+      version: 3,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          Future<void> addColumn(String table, String column, String definition) async {
+            final info = await db.rawQuery('PRAGMA table_info($table)');
+            if (!info.any((row) => row['name'] == column)) {
+              await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+            }
+          }
+          await addColumn('users', 'service_access', "TEXT NOT NULL DEFAULT 'Services des cartes et annonces'");
+          await addColumn('users', 'is_first_admin', 'INTEGER NOT NULL DEFAULT 0');
+          await addColumn('members', 'photo_path', "TEXT NOT NULL DEFAULT ''");
+          await addColumn('members', 'baptized', 'INTEGER NOT NULL DEFAULT 0');
+          await addColumn('members', 'church_role', "TEXT NOT NULL DEFAULT ''");
+          await addColumn('members', 'sunday_school_class_id', 'INTEGER');
+          await addColumn('transactions', 'group_id', 'INTEGER');
+          await addColumn('transactions', 'payment_method', "TEXT NOT NULL DEFAULT ''");
+          await db.execute('''CREATE TABLE IF NOT EXISTS groups_classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, item_type TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '', leader_name TEXT NOT NULL DEFAULT '',
+            monthly_contribution REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL)''');
+          await db.execute('''CREATE TABLE IF NOT EXISTS member_groups (
+            member_id INTEGER NOT NULL, group_id INTEGER NOT NULL, PRIMARY KEY(member_id, group_id),
+            FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE,
+            FOREIGN KEY(group_id) REFERENCES groups_classes(id) ON DELETE CASCADE)''');
+          await db.execute('''CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+            target_group TEXT NOT NULL DEFAULT 'Tous les membres', description TEXT NOT NULL,
+            announcement_date TEXT NOT NULL, signature TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'Brouillon', created_at TEXT NOT NULL)''');
+        }
+        if (oldVersion < 3) {
+          await db.execute('''CREATE TABLE IF NOT EXISTS groups_classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, item_type TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '', leader_name TEXT NOT NULL DEFAULT '',
+            monthly_contribution REAL NOT NULL DEFAULT 0, active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL)''');
+          await db.execute('''CREATE TABLE IF NOT EXISTS member_groups (
+            member_id INTEGER NOT NULL, group_id INTEGER NOT NULL,
+            PRIMARY KEY(member_id, group_id),
+            FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE,
+            FOREIGN KEY(group_id) REFERENCES groups_classes(id) ON DELETE CASCADE)''');
+          await db.execute('''CREATE TABLE IF NOT EXISTS announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
+            target_group TEXT NOT NULL DEFAULT 'Tous les membres', description TEXT NOT NULL,
+            announcement_date TEXT NOT NULL, signature TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'Brouillon', created_at TEXT NOT NULL)''');
+          final memberInfo = await db.rawQuery('PRAGMA table_info(members)');
+          Future<void> addMemberColumn(String name, String definition) async {
+            if (!memberInfo.any((row) => row['name'] == name)) {
+              await db.execute('ALTER TABLE members ADD COLUMN $name $definition');
+            }
+          }
+          await addMemberColumn('photo_path', "TEXT NOT NULL DEFAULT ''");
+          await addMemberColumn('baptized', 'INTEGER NOT NULL DEFAULT 0');
+          await addMemberColumn('church_role', "TEXT NOT NULL DEFAULT ''");
+          await addMemberColumn('sunday_school_class_id', 'INTEGER');
+          final txInfo = await db.rawQuery('PRAGMA table_info(transactions)');
+          if (!txInfo.any((row) => row['name'] == 'group_id')) await db.execute('ALTER TABLE transactions ADD COLUMN group_id INTEGER');
+          if (!txInfo.any((row) => row['name'] == 'payment_method')) await db.execute("ALTER TABLE transactions ADD COLUMN payment_method TEXT NOT NULL DEFAULT ''");
+        }
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -33,7 +95,9 @@ class AppDatabase {
             username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL,
             salt TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'Administrateur',
+            role TEXT NOT NULL DEFAULT 'Utilisateur',
+            service_access TEXT NOT NULL DEFAULT 'Services des cartes et annonces',
+            is_first_admin INTEGER NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
           )
@@ -49,6 +113,10 @@ class AppDatabase {
             birth_date TEXT NOT NULL DEFAULT '',
             address TEXT NOT NULL DEFAULT '',
             family_id INTEGER,
+            photo_path TEXT NOT NULL DEFAULT '',
+            baptized INTEGER NOT NULL DEFAULT 0,
+            church_role TEXT NOT NULL DEFAULT '',
+            sunday_school_class_id INTEGER,
             status TEXT NOT NULL DEFAULT 'Actif',
             notes TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
@@ -61,6 +129,39 @@ class AppDatabase {
             name TEXT NOT NULL,
             address TEXT NOT NULL DEFAULT '',
             notes TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE groups_classes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            leader_name TEXT NOT NULL DEFAULT '',
+            monthly_contribution REAL NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE member_groups (
+            member_id INTEGER NOT NULL,
+            group_id INTEGER NOT NULL,
+            PRIMARY KEY(member_id, group_id),
+            FOREIGN KEY(member_id) REFERENCES members(id) ON DELETE CASCADE,
+            FOREIGN KEY(group_id) REFERENCES groups_classes(id) ON DELETE CASCADE
+          )
+        ''');
+        await db.execute('''
+          CREATE TABLE announcements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            target_group TEXT NOT NULL DEFAULT 'Tous les membres',
+            description TEXT NOT NULL,
+            announcement_date TEXT NOT NULL,
+            signature TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'Brouillon',
             created_at TEXT NOT NULL
           )
         ''');
@@ -100,6 +201,8 @@ class AppDatabase {
             amount REAL NOT NULL,
             transaction_date TEXT NOT NULL,
             description TEXT NOT NULL DEFAULT '',
+            group_id INTEGER,
+            payment_method TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL
           )
         ''');
