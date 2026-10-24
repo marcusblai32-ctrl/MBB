@@ -94,7 +94,7 @@ class _LoginPageState extends State<LoginPage> {
       if (error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(error!, style: const TextStyle(color: Colors.red))),
       const SizedBox(height: 18), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: busy ? null : login, icon: const Icon(Icons.login), label: Text(busy ? 'Connexion…' : 'Se connecter'))),
       TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SignupPage(onCreated: (user) { Navigator.of(context).pop(); widget.onLogin(user); }))), child: const Text('Créer un compte')),
-    ]))))))),
+    ])))))),
   );
 }
 
