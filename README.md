@@ -1,16 +1,56 @@
 # MBB — Mission Baptiste Béraca
 
-Base Flutter initiale inspirée de la maquette visuelle fournie : tableau de bord, navigation, membres, familles, services, présences, finances, rapports, sauvegardes et personnalisation.
+Application Flutter de gestion d'église, conçue pour fonctionner hors ligne avec une base de données SQLite locale.
 
-## Lancer localement
-1. Installer Flutter et le SDK correspondant à votre système.
-2. Depuis la racine : `flutter pub get`
-3. Créer les plateformes si elles sont absentes : `flutter create --platforms=android,windows .`
-4. Android : `flutter run`
-5. Windows : `flutter run -d windows`
+## Modules inclus dans cette version
 
-## Générations GitHub Actions
-Envoyer le contenu du projet dans un dépôt GitHub, puis ouvrir Actions. Le workflow `Build MBB` crée les dossiers Android et Windows s'ils sont absents et publie les artefacts `MBB.apk`, `MBB-Windows.zip`. Le fichier `MBB.exe` est inclus dans le ZIP Windows.
+- Tableau de bord avec nombre de membres, familles, cultes, recettes, dépenses et solde.
+- Membres : ajout, recherche, modification et suppression.
+- Familles : ajout et suppression.
+- Cultes et réunions : ajout et suppression.
+- Présences : marquer Présent, Absent ou Retard pour une date.
+- Finances : enregistrer recettes et dépenses, consulter et supprimer les opérations.
+- Paramètres : nom de l'église, nom d'application enregistré et langue.
+- Sauvegarde/restauration de la base SQLite et export CSV de l'historique.
+- Journal local des actions importantes.
+- GitHub Actions pour construire un APK Android et un ZIP Windows.
 
-## Important
-Ceci est une base fonctionnelle de démarrage avec navigation et données de démonstration. Les modules de gestion complète, l'authentification robuste, les permissions fines, les exports réels Excel/PDF/Word et les sauvegardes chiffrées doivent être implémentés et testés avant usage avec des données réelles. Le nom et le logo dans l'interface sont configurables ; le nom et l'icône natifs installés nécessitent une reconstruction spécifique.
+## Prérequis
+
+Installer Flutter stable et configurer Android SDK pour les builds locaux. Pour Windows, construire sur Windows.
+
+## Démarrage
+
+```bash
+flutter pub get
+flutter run
+```
+
+## Builds locaux
+
+```bash
+flutter build apk --release
+flutter build windows --release
+```
+
+## Builds GitHub
+
+1. Créez un dépôt GitHub privé nommé `MBB`.
+2. Envoyez tous les fichiers de ce dossier à la racine du dépôt (pas le ZIP seul).
+3. Ouvrez l'onglet **Actions**. Le workflow se lance sur `push` ou manuellement.
+4. Téléchargez `MBB-Android-APK` ou `MBB-Windows-ZIP` dans les artefacts du workflow.
+
+## Base de données
+
+La base est créée automatiquement dans le répertoire privé de l'application sous le nom `mbb_database.db`. Les tables incluent `users`, `members`, `families`, `services`, `attendance`, `finance_categories`, `transactions`, `app_settings` et `audit_logs`.
+
+Le schéma inclut une table `users`, mais cette version n'a pas encore d'écran de connexion ni de gestion des rôles utilisable. N'utilisez pas l'application comme système de sécurité de production avant d'ajouter l'authentification, les permissions et le chiffrement des sauvegardes.
+
+## Limites à connaître
+
+- Le nom de l'application système et l'icône ne peuvent pas être changés dynamiquement depuis l'écran Paramètres après compilation. Il faut une configuration de build pour cela.
+- La sauvegarde `.db` n'est pas chiffrée.
+- L'import de sauvegarde remplace la base active; après restauration, fermer puis rouvrir l'application.
+- La langue est enregistrée mais la traduction complète de l'interface n'est pas encore implémentée.
+- Les rapports PDF/XLSX/DOCX, les reçus financiers et la gestion avancée des familles/membres sont à compléter.
+- Le test fourni est un test de fumée, pas une validation exhaustive de tous les modules.
