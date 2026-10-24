@@ -22,6 +22,7 @@ jobs:
         run: |
           if [ ! -d android ]; then flutter create --platforms=android --project-name mbb .; fi
       - run: flutter pub get
+      - run: dart run flutter_launcher_icons
       - run: flutter analyze
       - run: flutter test
       - run: flutter build apk --release
