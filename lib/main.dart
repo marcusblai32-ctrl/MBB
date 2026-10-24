@@ -94,7 +94,7 @@ class _LoginPageState extends State<LoginPage> {
       if (error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(error!, style: const TextStyle(color: Colors.red))),
       const SizedBox(height: 18), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: busy ? null : login, icon: const Icon(Icons.login), label: Text(busy ? 'Connexion…' : 'Se connecter'))),
       TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SignupPage(onCreated: (user) { Navigator.of(context).pop(); widget.onLogin(user); }))), child: const Text('Créer un compte')),
-    ]))))),
+    ]))))))),
   );
 }
 
@@ -456,7 +456,29 @@ class _FamiliesPageState extends State<FamiliesPage> {
     body: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('families', orderBy: 'name'), builder: (context, snap) {
       if (!snap.hasData) return const Center(child: CircularProgressIndicator());
       if (snap.data!.isEmpty) return const Center(child: Text('Aucune famille enregistrée.'));
-      return ListView(padding: const EdgeInsets.all(12), children: snap.data!.map((r) => Card(child: ListTile(leading: const Icon(Icons.family_restroom, color: teal), title: Text('${r['name']}'), subtitle: Text('${r['address']}'), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { if (await confirmDelete(context, '${r['name']}')) { await AppDatabase.instance.delete('families', where: 'id = ?', whereArgs: [r['id']]); if (mounted) setState(() {}); } }))).toList());
+      return ListView(
+        padding: const EdgeInsets.all(12),
+        children: snap.data!.map((r) {
+          return Card(
+            child: ListTile(
+              leading: const Icon(Icons.family_restroom, color: teal),
+              title: Text('${r['name']}'),
+              subtitle: Text('${r['address']}'),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline),
+                onPressed: () async {
+                  if (await confirmDelete(context, '${r['name']}')) {
+                    await AppDatabase.instance.delete(
+                      'families', where: 'id = ?', whereArgs: [r['id']],
+                    );
+                    if (mounted) setState(() {});
+                  }
+                },
+              ),
+            ),
+          );
+        }).toList(),
+      );
     }));
 }
 
@@ -470,7 +492,29 @@ class _ServicesPageState extends State<ServicesPage> {
     body: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('services', orderBy: 'service_date DESC'), builder: (context, snap) {
       if (!snap.hasData) return const Center(child: CircularProgressIndicator());
       if (snap.data!.isEmpty) return const Center(child: Text('Aucun culte ou réunion enregistré.'));
-      return ListView(padding: const EdgeInsets.all(12), children: snap.data!.map((r) => Card(child: ListTile(leading: const Icon(Icons.church, color: navy), title: Text('${r['title']}'), subtitle: Text('${r['service_date']} — ${r['notes']}'), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { if (await confirmDelete(context, '${r['title']}')) { await AppDatabase.instance.delete('services', where: 'id = ?', whereArgs: [r['id']]); if (mounted) setState(() {}); } }))).toList());
+      return ListView(
+        padding: const EdgeInsets.all(12),
+        children: snap.data!.map((r) {
+          return Card(
+            child: ListTile(
+              leading: const Icon(Icons.church, color: navy),
+              title: Text('${r['title']}'),
+              subtitle: Text('${r['service_date']} — ${r['notes']}'),
+              trailing: IconButton(
+                icon: const Icon(Icons.delete_outline),
+                onPressed: () async {
+                  if (await confirmDelete(context, '${r['title']}')) {
+                    await AppDatabase.instance.delete(
+                      'services', where: 'id = ?', whereArgs: [r['id']],
+                    );
+                    if (mounted) setState(() {});
+                  }
+                },
+              ),
+            ),
+          );
+        }).toList(),
+      );
     }));
 }
 
@@ -495,7 +539,7 @@ class _AttendancePageState extends State<AttendancePage> {
         final current = aSnap.data?.isNotEmpty == true ? '${aSnap.data!.first['status']}' : 'Non marqué';
         return Card(child: ListTile(title: Text('${m['first_name']} ${m['last_name']}'), subtitle: Text('Statut : $current'), trailing: PopupMenuButton<String>(tooltip: 'Enregistrer présence', onSelected: (v) => mark(m, v), itemBuilder: (_) => const [
           PopupMenuItem(value: 'Présent', child: Text('Présent')), PopupMenuItem(value: 'Absent', child: Text('Absent')), PopupMenuItem(value: 'Retard', child: Text('Retard')),
-        ]));
+        ])));
       })).toList());
     })),
   ]);
