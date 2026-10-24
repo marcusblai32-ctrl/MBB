@@ -36,7 +36,7 @@ class _MbbAppState extends State<MbbApp> {
       appName = prefs.getString('appName') ?? 'MBB';
       churchName = prefs.getString('churchName') ?? 'Mission Baptiste Béraca';
       logoPath = prefs.getString('logoPath') ?? '';
-      primary = Color(prefs.getInt('primaryColor') ?? navy.value);
+      primary = Color(prefs.getInt('primaryColor') ?? navy.toARGB32());
       loading = false;
     });
   }
@@ -45,7 +45,7 @@ class _MbbAppState extends State<MbbApp> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('appName', app);
     await prefs.setString('churchName', church);
-    await prefs.setInt('primaryColor', color.value);
+    await prefs.setInt('primaryColor', color.toARGB32());
     await prefs.setString('logoPath', logo);
     setState(() {
       appName = app;
@@ -361,19 +361,51 @@ class FinancePage extends StatelessWidget {
 
 class ReportsPage extends StatelessWidget {
   const ReportsPage({super.key});
+
   @override
-  Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(22), children: [
-    Text('Rapports et statistiques', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
-    const SizedBox(height: 12),
-    ...[
+  Widget build(BuildContext context) {
+    final reports = <(String, String, IconData)>[
       ('Présences', 'Rapport de présences', Icons.fact_check_outlined),
       ('Absences', 'Rapport des absences', Icons.person_off_outlined),
       ('Retards', 'Rapport des retards', Icons.schedule),
       ('Classements', 'Classements par période', Icons.leaderboard_outlined),
       ('Liste des membres', 'Liste complète', Icons.people_alt_outlined),
       ('Rapport financier', 'Recettes, dépenses et solde', Icons.account_balance_wallet_outlined),
-    ].map((item) => Card(child: ListTile(leading: Icon(item.$3, color: blue), title: Text(item.$1), subtitle: Text(item.$2), trailing: const Icon(Icons.chevron_right), onTap: () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('La génération des fichiers Excel, PDF et Word sera ajoutée dans le module Rapports.'))))),
-  ]);
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.all(22),
+      children: [
+        Text(
+          'Rapports et statistiques',
+          style: Theme.of(context)
+              .textTheme
+              .headlineMedium
+              ?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 12),
+        ...reports.map(
+          (item) => Card(
+            child: ListTile(
+              leading: Icon(item.$3, color: blue),
+              title: Text(item.$1),
+              subtitle: Text(item.$2),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'La génération Excel, PDF et Word sera ajoutée au module Rapports.',
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class AdminPage extends StatelessWidget {
