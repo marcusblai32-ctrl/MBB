@@ -1,115 +1,64 @@
-name: Build MBB Android + Windows
+name: Build MBB Android and Windows
 
 on:
-  workflow_dispatch:
   push:
-    branches: [ main, master ]
-    tags: [ 'v*' ]
+    branches: [main, master]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   android:
-    name: Android APK
+    name: Build Android APK
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-
-      - name: Ensure Android platform exists
-        shell: bash
+      - name: Generate Android platform if missing
         run: |
-          if [ ! -d android ]; then
-            flutter create --platforms=android,windows --project-name mbb .
-          fi
-
-      - name: Resolve dependencies
-        run: flutter pub get
-
-      - name: Analyze and test
-        run: |
-          flutter analyze
-          flutter test
-
-      - name: Build APK
-        run: flutter build apk --release
-
-      - name: Prepare APK artifact
-        run: |
-          mkdir -p out
-          cp build/app/outputs/flutter-apk/app-release.apk out/MBB.apk
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          if [ ! -d android ]; then flutter create --platforms=android --project-name mbb .; fi
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build apk --release
+      - name: Rename APK
+        run: cp build/app/outputs/flutter-apk/app-release.apk MBB.apk
+      - uses: actions/upload-artifact@v4
         with:
-          name: MBB.apk
-          path: out/MBB.apk
+          name: MBB-Android-APK
+          path: MBB.apk
           if-no-files-found: error
 
   windows:
-    name: Windows release ZIP
+    name: Build Windows application
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
-
-      - name: Ensure Windows platform exists
+      - name: Generate Windows platform if missing
         shell: pwsh
         run: |
-          if (!(Test-Path "windows")) {
-            flutter create --platforms=android,windows --project-name mbb .
-          }
-
-      - name: Resolve dependencies
-        run: flutter pub get
-
-      - name: Analyze and test
-        run: |
-          flutter analyze
-          flutter test
-
-      - name: Build Windows
-        run: flutter build windows --release
-
-      - name: Package Windows runtime
+          if (!(Test-Path windows)) { flutter create --platforms=windows --project-name mbb . }
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: flutter build windows --release
+      - name: Package Windows files
         shell: pwsh
         run: |
-          $release = "build/windows/x64/runner/Release"
-          if (!(Test-Path "$release/mbb.exe")) {
-            $exe = Get-ChildItem -Path "build/windows" -Filter "*.exe" -Recurse | Select-Object -First 1
-            if ($null -eq $exe) { throw "Windows executable was not found." }
-            $release = $exe.DirectoryName
-          }
-          New-Item -ItemType Directory -Force -Path out | Out-Null
-          Copy-Item -Path "$release/*" -Destination out -Recurse -Force
-          $candidate = Get-ChildItem out -Filter "*.exe" | Select-Object -First 1
-          if ($null -eq $candidate) { throw "No EXE found in packaged output." }
-          Copy-Item $candidate.FullName "out/MBB.exe" -Force
-          Compress-Archive -Path "out/*" -DestinationPath "MBB-Windows.zip" -Force
-
-      - name: Upload Windows ZIP
-        uses: actions/upload-artifact@v4
+          $out = "build\windows\x64\runner\Release"
+          if (!(Test-Path "$out\mbb.exe")) { throw "mbb.exe was not found in $out" }
+          Copy-Item "$out\mbb.exe" "MBB.exe"
+          Compress-Archive -Path "$out\*" -DestinationPath "MBB-Windows.zip" -Force
+      - uses: actions/upload-artifact@v4
         with:
-          name: MBB-Windows.zip
+          name: MBB-Windows-ZIP
           path: MBB-Windows.zip
-          if-no-files-found: error
-
-      - name: Upload standalone EXE
-        uses: actions/upload-artifact@v4
-        with:
-          name: MBB.exe
-          path: out/MBB.exe
           if-no-files-found: error
