@@ -1,56 +1,57 @@
 # MBB — Mission Baptiste Béraca
 
-Application Flutter de gestion d'église, conçue pour fonctionner hors ligne avec une base de données SQLite locale.
+Application Flutter de gestion d'église, avec interface en français et base SQLite locale pour un fonctionnement hors ligne.
 
-## Modules inclus dans cette version
+## Fonctionnalités de cette version de travail
 
-- Tableau de bord avec nombre de membres, familles, cultes, recettes, dépenses et solde.
-- Membres : ajout, recherche, modification et suppression.
-- Familles : ajout et suppression.
-- Cultes et réunions : ajout et suppression.
-- Présences : marquer Présent, Absent ou Retard pour une date.
-- Finances : enregistrer recettes et dépenses, consulter et supprimer les opérations.
-- Paramètres : nom de l'église, nom d'application enregistré et langue.
-- Sauvegarde/restauration de la base SQLite et export CSV de l'historique.
-- Journal local des actions importantes.
-- GitHub Actions pour construire un APK Android et un ZIP Windows.
+- Connexion et inscription locales avec mot de passe haché et salé.
+- Le premier compte créé devient ADM ; les suivants sont des utilisateurs.
+- À l'inscription, choix obligatoire entre « Services des cartes et annonces » et « Comptabilité ».
+- Navigation adaptée au service choisi (le compte ADM voit les deux espaces).
+- Tableau de bord, membres, familles, cultes/réunions, présences et opérations financières.
+- Création dynamique des classes et groupes, sans liste de groupes imposée ; « Pastorat » peut être créé comme tout autre groupe.
+- Création d'annonces avec titre, groupe concerné, description, date et signature.
+- Paramètres, sauvegarde/restauration et journal local déjà présents dans le projet de base.
+- Icône Android MBB générée automatiquement par le workflow.
+- GitHub Actions pour générer un APK Android et un ZIP Windows contenant les fichiers de l'application.
 
-## Prérequis
-
-Installer Flutter stable et configurer Android SDK pour les builds locaux. Pour Windows, construire sur Windows.
-
-## Démarrage
+## Construire
 
 ```bash
 flutter pub get
-flutter run
+dart run flutter_launcher_icons
+flutter analyze
+flutter test
+flutter build apk --release
 ```
 
-## Builds locaux
+Sur Windows :
 
 ```bash
-flutter build apk --release
 flutter build windows --release
 ```
 
-## Builds GitHub
+## GitHub Actions
 
-1. Créez un dépôt GitHub privé nommé `MBB`.
-2. Envoyez tous les fichiers de ce dossier à la racine du dépôt (pas le ZIP seul).
-3. Ouvrez l'onglet **Actions**. Le workflow se lance sur `push` ou manuellement.
-4. Téléchargez `MBB-Android-APK` ou `MBB-Windows-ZIP` dans les artefacts du workflow.
+Pousser tous les fichiers du projet à la racine du dépôt GitHub, puis ouvrir **Actions**. Les artefacts `MBB-Android-APK` et `MBB-Windows-ZIP` seront disponibles si toutes les étapes passent.
 
-## Base de données
+## Important : état actuel
 
-La base est créée automatiquement dans le répertoire privé de l'application sous le nom `mbb_database.db`. Les tables incluent `users`, `members`, `families`, `services`, `attendance`, `finance_categories`, `transactions`, `app_settings` et `audit_logs`.
+Ceci est une version de travail, pas encore une version de production. Les fonctionnalités suivantes restent à terminer ou à valider :
 
-Le schéma inclut une table `users`, mais cette version n'a pas encore d'écran de connexion ni de gestion des rôles utilisable. N'utilisez pas l'application comme système de sécurité de production avant d'ajouter l'authentification, les permissions et le chiffrement des sauvegardes.
+- Gestion sécurisée des comptes par ADM, y compris suppression/désactivation d'autres comptes et contrôle strict des autorisations dans toutes les actions.
+- Photos des membres avec sélecteur de fichier, affichage et stockage fiable sur les deux plateformes.
+- Association détaillée des membres aux familles, groupes et classes de l'école du dimanche depuis leurs fiches.
+- Rapports PDF, exports Excel/Word, génération de cartes, et export PDF des annonces.
+- Comptabilité complète (budgets, reçus, clôture mensuelle, rapprochement et rapports détaillés).
+- Chiffrement des sauvegardes et tests complets sur Android et Windows.
+- Vérification réelle de `flutter analyze`, tests et builds dans GitHub Actions : aucun résultat de compilation n'est garanti avant l'exécution du workflow.
 
-## Limites à connaître
+Les données sont locales à chaque appareil dans cette version. Pour partager les mêmes données entre plusieurs utilisateurs/appareils, il faudra ensuite intégrer une API et une base de données synchronisée.
 
-- Le nom de l'application système et l'icône ne peuvent pas être changés dynamiquement depuis l'écran Paramètres après compilation. Il faut une configuration de build pour cela.
-- La sauvegarde `.db` n'est pas chiffrée.
-- L'import de sauvegarde remplace la base active; après restauration, fermer puis rouvrir l'application.
-- La langue est enregistrée mais la traduction complète de l'interface n'est pas encore implémentée.
-- Les rapports PDF/XLSX/DOCX, les reçus financiers et la gestion avancée des familles/membres sont à compléter.
-- Le test fourni est un test de fumée, pas une validation exhaustive de tous les modules.
+
+## Mise à jour — gestion des membres
+
+Le formulaire des membres permet maintenant de sélectionner une photo depuis l'appareil, de conserver une copie dans le répertoire privé de l'application, de renseigner la famille, le statut de baptême et le rôle, et de relier le membre aux groupes/classes dynamiques existants. La classe d'école du dimanche est choisie parmi les éléments dont le type contient « classe » ou « école ».
+
+**État honnête du projet :** cette archive est une version de travail, pas encore une livraison finale validée. L'environnement de préparation ne dispose pas du SDK Flutter/Dart pour exécuter `flutter analyze`, `flutter test` ou les builds. Il faut laisser GitHub Actions effectuer ces vérifications, puis corriger tout éventuel échec avant d'utiliser l'application avec de vraies données.
