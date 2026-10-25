@@ -4,10 +4,10 @@ Application Flutter de gestion d'église, avec interface en français et base SQ
 
 ## Fonctionnalités de cette version de travail
 
-- Connexion et inscription locales avec mot de passe haché et salé.
-- Le premier compte créé devient ADM ; les suivants sont des utilisateurs.
-- À l'inscription, choix obligatoire entre « Services des cartes et annonces » et « Comptabilité ».
-- Navigation adaptée au service choisi (le compte ADM voit les deux espaces).
+- Connexion locale ; mots de passe PBKDF2-HMAC-SHA256 (les anciens comptes sont migrés automatiquement à la première connexion).
+- Deux bureaux strictement séparés : Comptabilité et Service des cartes et annonces. Aucun administrateur général.
+- Chaque bureau a ses administrateurs et ses employés. Plus d'inscription libre : le premier administrateur d'un bureau est créé via « Première configuration » (possible uniquement tant que le bureau n'en a pas), puis l'administrateur crée les comptes de son bureau (page Comptes).
+- Les anciens comptes « ADM » deviennent administrateurs du seul bureau qu'ils avaient choisi.
 - Tableau de bord, membres, familles, cultes/réunions, présences et opérations financières.
 - Création dynamique des classes et groupes, sans liste de groupes imposée ; « Pastorat » peut être créé comme tout autre groupe.
 - Création d'annonces avec titre, groupe concerné, description, date et signature.
