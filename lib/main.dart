@@ -1,8 +1,5 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
-import 'package:crypto/crypto.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -10,6 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
+import 'auth/auth_service.dart';
+import 'core/permissions.dart';
 import 'database/app_database.dart';
 
 const navy = Color(0xFF17365D);
@@ -51,19 +50,17 @@ class AuthGate extends StatefulWidget {
 }
 
 class _AuthGateState extends State<AuthGate> {
-  Map<String, Object?>? currentUser;
+  Principal? currentUser;
   @override
   Widget build(BuildContext context) {
-    if (currentUser != null) return HomeShell(currentUser: currentUser!, onLogout: () => setState(() => currentUser = null));
+    if (currentUser != null) return HomeShell(principal: currentUser!, onLogout: () => setState(() => currentUser = null));
     return LoginPage(onLogin: (user) => setState(() => currentUser = user));
   }
 }
 
-String _hashPassword(String salt, String password) => sha256.convert(utf8.encode('$salt:$password')).toString();
-
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key, required this.onLogin});
-  final ValueChanged<Map<String, Object?>> onLogin;
+  final ValueChanged<Principal> onLogin;
   @override State<LoginPage> createState() => _LoginPageState();
 }
 class _LoginPageState extends State<LoginPage> {
@@ -71,14 +68,20 @@ class _LoginPageState extends State<LoginPage> {
   final password = TextEditingController();
   bool busy = false;
   String? error;
+  List<Bureau> bureausWithoutAdmin = const [];
+  @override void initState() { super.initState(); _loadSetup(); }
+  Future<void> _loadSetup() async {
+    final list = await AuthService.bureausWithoutAdmin();
+    if (mounted) setState(() => bureausWithoutAdmin = list);
+  }
   Future<void> login() async {
     setState(() { busy = true; error = null; });
     try {
-      final rows = await AppDatabase.instance.query('users', where: 'username = ? AND active = 1', whereArgs: [username.text.trim().toLowerCase()]);
-      if (rows.isEmpty || _hashPassword('${rows.first['salt']}', password.text) != rows.first['password_hash']) {
+      final principal = await AuthService.login(username.text, password.text);
+      if (principal == null) {
         setState(() => error = 'Identifiant ou mot de passe incorrect.');
       } else {
-        widget.onLogin(rows.first);
+        widget.onLogin(principal);
       }
     } catch (_) { setState(() => error = 'Impossible de se connecter. Vérifiez les données locales.'); }
     if (mounted) setState(() => busy = false);
@@ -86,82 +89,97 @@ class _LoginPageState extends State<LoginPage> {
   @override void dispose() { username.dispose(); password.dispose(); super.dispose(); }
   @override Widget build(BuildContext context) => Scaffold(
     body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Card(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
-      Container(width: 76, height: 76, decoration: BoxDecoration(color: navy, borderRadius: BorderRadius.circular(20)), child: const Icon(Icons.church_outlined, color: Colors.white, size: 44)),
+      ClipRRect(borderRadius: BorderRadius.circular(18), child: Image.asset('assets/mbb_icon.png', width: 84, height: 84)),
       const SizedBox(height: 12), const Text('MBB', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: navy)),
       const Text('Mission Baptiste Béraca', textAlign: TextAlign.center), const SizedBox(height: 24),
-      TextField(controller: username, decoration: const InputDecoration(labelText: 'Identifiant ou e-mail', prefixIcon: Icon(Icons.person_outline))),
+      TextField(controller: username, decoration: const InputDecoration(labelText: 'Identifiant', prefixIcon: Icon(Icons.person_outline))),
       const SizedBox(height: 12), TextField(controller: password, obscureText: true, onSubmitted: (_) => login(), decoration: const InputDecoration(labelText: 'Mot de passe', prefixIcon: Icon(Icons.lock_outline))),
       if (error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(error!, style: const TextStyle(color: Colors.red))),
       const SizedBox(height: 18), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: busy ? null : login, icon: const Icon(Icons.login), label: Text(busy ? 'Connexion…' : 'Se connecter'))),
-      TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SignupPage(onCreated: (user) { Navigator.of(context).pop(); widget.onLogin(user); }))), child: const Text('Créer un compte')),
+      if (bureausWithoutAdmin.isNotEmpty) TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SetupPage(bureaus: bureausWithoutAdmin, onCreated: (user) { Navigator.of(context).pop(); widget.onLogin(user); }))), child: const Text('Première configuration d’un bureau')),
+      const SizedBox(height: 4),
+      const Text('Les comptes sont créés par l’administrateur de chaque bureau.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.black54)),
     ])))))),
   );
 }
 
-class SignupPage extends StatefulWidget {
-  const SignupPage({super.key, required this.onCreated});
-  final ValueChanged<Map<String, Object?>> onCreated;
-  @override State<SignupPage> createState() => _SignupPageState();
+/// Création du PREMIER administrateur d'un bureau qui n'en a pas encore.
+/// Une fois l'administrateur créé, ce chemin se referme pour ce bureau.
+class SetupPage extends StatefulWidget {
+  const SetupPage({super.key, required this.bureaus, required this.onCreated});
+  final List<Bureau> bureaus;
+  final ValueChanged<Principal> onCreated;
+  @override State<SetupPage> createState() => _SetupPageState();
 }
-class _SignupPageState extends State<SignupPage> {
+class _SetupPageState extends State<SetupPage> {
   final username = TextEditingController(); final password = TextEditingController(); final confirm = TextEditingController();
-  String service = 'Services des cartes et annonces'; String? error; bool busy = false;
-  Future<void> createAccount() async {
-    final name = username.text.trim().toLowerCase();
-    if (name.isEmpty || password.text.length < 8 || password.text != confirm.text) {
-      setState(() => error = 'Saisissez un identifiant, un mot de passe de 8 caractères minimum et deux mots de passe identiques.'); return;
-    }
+  late Bureau bureau = widget.bureaus.first; String? error; bool busy = false;
+  Future<void> create() async {
+    if (password.text != confirm.text) { setState(() => error = 'Les deux mots de passe ne sont pas identiques.'); return; }
     setState(() { busy = true; error = null; });
     try {
-      final db = AppDatabase.instance;
-      final count = await db.count('users');
-      final salt = List<int>.generate(16, (_) => Random.secure().nextInt(256)).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
-      final values = <String, Object?>{'username': name, 'password_hash': _hashPassword(salt, password.text), 'salt': salt,
-        'role': count == 0 ? 'ADM' : 'Utilisateur', 'service_access': service, 'is_first_admin': count == 0 ? 1 : 0,
-        'active': 1, 'created_at': nowIso()};
-      final id = await db.insert('users', values);
-      await db.log('CREATE_ACCOUNT', '$name / $service / ${count == 0 ? 'ADM' : 'Utilisateur'}');
+      final principal = await AuthService.bootstrapAdmin(bureau, username.text, password.text);
       if (!mounted) return;
-      widget.onCreated({...values, 'id': id});
-    } catch (_) { setState(() => error = 'Cet identifiant existe déjà ou le compte n’a pas pu être créé.'); }
+      widget.onCreated(principal);
+      return;
+    } on ArgumentError catch (e) { error = '${e.message}'; }
+    on AuthorizationException catch (e) { error = e.message; }
+    catch (_) { error = 'Cet identifiant existe déjà ou le compte n’a pas pu être créé.'; }
     if (mounted) setState(() => busy = false);
   }
   @override void dispose() { username.dispose(); password.dispose(); confirm.dispose(); super.dispose(); }
-  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Créer un compte')), body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 480), child: ListView(padding: const EdgeInsets.all(20), children: [
-    const Icon(Icons.person_add_alt_1, size: 52, color: navy), const SizedBox(height: 16),
-    TextField(controller: username, decoration: const InputDecoration(labelText: 'Identifiant', prefixIcon: Icon(Icons.person_outline))), const SizedBox(height: 12),
-    TextField(controller: password, obscureText: true, decoration: const InputDecoration(labelText: 'Mot de passe (8 caractères minimum)', prefixIcon: Icon(Icons.lock_outline))), const SizedBox(height: 12),
-    TextField(controller: confirm, obscureText: true, decoration: const InputDecoration(labelText: 'Confirmer le mot de passe', prefixIcon: Icon(Icons.lock_reset))), const SizedBox(height: 18),
-    DropdownButtonFormField<String>(initialValue: service, decoration: const InputDecoration(labelText: 'Service auquel vous souhaitez accéder', prefixIcon: Icon(Icons.work_outline)), items: const [
-      DropdownMenuItem(value: 'Services des cartes et annonces', child: Text('Services des cartes et annonces')),
-      DropdownMenuItem(value: 'Comptabilité', child: Text('Comptabilité')),
-    ], onChanged: (v) { if (v != null) setState(() => service = v); }),
-    const SizedBox(height: 10), const Text('Le premier compte créé devient Administrateur (ADM). Les comptes suivants restent des utilisateurs.'),
+  @override Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Première configuration')), body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 480), child: ListView(padding: const EdgeInsets.all(20), children: [
+    const Icon(Icons.admin_panel_settings_outlined, size: 52, color: navy), const SizedBox(height: 12),
+    const Text('Créez l’administrateur d’un bureau qui n’en possède pas encore. Cet administrateur n’aura accès qu’à son propre bureau.'),
+    const SizedBox(height: 16),
+    DropdownButtonFormField<Bureau>(initialValue: bureau, decoration: const InputDecoration(labelText: 'Bureau', prefixIcon: Icon(Icons.work_outline)), items: [for (final b in widget.bureaus) DropdownMenuItem(value: b, child: Text(b.label))], onChanged: (v) { if (v != null) setState(() => bureau = v); }),
+    const SizedBox(height: 12), TextField(controller: username, decoration: const InputDecoration(labelText: 'Identifiant', prefixIcon: Icon(Icons.person_outline))),
+    const SizedBox(height: 12), TextField(controller: password, obscureText: true, decoration: const InputDecoration(labelText: 'Mot de passe (8 caractères minimum)', prefixIcon: Icon(Icons.lock_outline))),
+    const SizedBox(height: 12), TextField(controller: confirm, obscureText: true, decoration: const InputDecoration(labelText: 'Confirmer le mot de passe', prefixIcon: Icon(Icons.lock_reset))),
     if (error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(error!, style: const TextStyle(color: Colors.red))),
-    const SizedBox(height: 16), FilledButton.icon(onPressed: busy ? null : createAccount, icon: const Icon(Icons.person_add), label: Text(busy ? 'Création…' : 'Créer mon compte')),
+    const SizedBox(height: 16), FilledButton.icon(onPressed: busy ? null : create, icon: const Icon(Icons.check), label: Text(busy ? 'Création…' : 'Créer l’administrateur')),
   ]))));
 }
 
 class HomeShell extends StatefulWidget {
-  const HomeShell({super.key, required this.currentUser, required this.onLogout});
-  final Map<String, Object?> currentUser;
+  const HomeShell({super.key, required this.principal, required this.onLogout});
+  final Principal principal;
   final VoidCallback onLogout;
   @override
   State<HomeShell> createState() => _HomeShellState();
 }
 
+class _NavItem {
+  const _NavItem(this.label, this.icon, this.page);
+  final String label; final IconData icon; final Widget page;
+}
+
 class _HomeShellState extends State<HomeShell> {
   int selected = 0;
   String churchName = 'Mission Baptiste Béraca';
-  late final List<Widget> pages;
-  late final List<String> labels;
-  late final List<IconData> icons;
-  bool get isAdmin => widget.currentUser['role'] == 'ADM' || widget.currentUser['is_first_admin'] == 1;
-  bool get accounting => widget.currentUser['service_access'] == 'Comptabilité';
+  late final List<_NavItem> items;
+  Principal get me => widget.principal;
+  bool get isAdmin => me.role == BureauRole.administrateur;
+
   @override void initState() { super.initState();
-    if (isAdmin) { pages = const [DashboardPage(), MembersPage(), FamiliesPage(), ServicesPage(), AttendancePage(), FinancePage(), GroupsPage(), AnnouncementsPage(), SettingsPage(), BackupPage()]; labels = const ['Tableau de bord','Membres','Familles','Cultes et réunions','Présences','Comptabilité','Classes et groupes','Annonces','Paramètres','Sauvegarde']; icons = const [Icons.dashboard_outlined,Icons.people_alt_outlined,Icons.family_restroom,Icons.church_outlined,Icons.fact_check_outlined,Icons.account_balance_wallet_outlined,Icons.groups_outlined,Icons.campaign_outlined,Icons.settings_outlined,Icons.backup_outlined]; }
-    else if (accounting) { pages = const [DashboardPage(), FinancePage(), GroupsPage(), SettingsPage(), BackupPage()]; labels = const ['Tableau de bord','Comptabilité','Classes et groupes','Paramètres','Sauvegarde']; icons = const [Icons.dashboard_outlined,Icons.account_balance_wallet_outlined,Icons.groups_outlined,Icons.settings_outlined,Icons.backup_outlined]; }
-    else { pages = const [DashboardPage(), MembersPage(), FamiliesPage(), ServicesPage(), AttendancePage(), GroupsPage(), AnnouncementsPage(), SettingsPage(), BackupPage()]; labels = const ['Tableau de bord','Membres','Familles','Cultes et réunions','Présences','Classes et groupes','Annonces','Paramètres','Sauvegarde']; icons = const [Icons.dashboard_outlined,Icons.people_alt_outlined,Icons.family_restroom,Icons.church_outlined,Icons.fact_check_outlined,Icons.groups_outlined,Icons.campaign_outlined,Icons.settings_outlined,Icons.backup_outlined]; }
+    final dash = _NavItem('Tableau de bord', Icons.dashboard_outlined, DashboardPage(bureau: me.bureau));
+    final extra = <_NavItem>[
+      if (AccessPolicy.can(me, Permission.usersManage)) _NavItem('Comptes', Icons.manage_accounts_outlined, AccountsPage(principal: me)),
+      if (isAdmin) const _NavItem('Paramètres', Icons.settings_outlined, SettingsPage()),
+      if (AccessPolicy.can(me, Permission.backupManage)) const _NavItem('Sauvegarde', Icons.backup_outlined, BackupPage()),
+    ];
+    if (me.bureau == Bureau.comptabilite) {
+      items = [dash, _NavItem('Comptabilité', Icons.account_balance_wallet_outlined, FinancePage(principal: me)), ...extra];
+    } else {
+      items = [dash,
+        _NavItem('Membres', Icons.people_alt_outlined, MembersPage(principal: me)),
+        const _NavItem('Familles', Icons.family_restroom, FamiliesPage()),
+        const _NavItem('Cultes et réunions', Icons.church_outlined, ServicesPage()),
+        const _NavItem('Présences', Icons.fact_check_outlined, AttendancePage()),
+        const _NavItem('Classes et groupes', Icons.groups_outlined, GroupsPage()),
+        const _NavItem('Annonces', Icons.campaign_outlined, AnnouncementsPage()),
+        ...extra];
+    }
   }
 
   Future<void> loadChurchName() async {
@@ -171,18 +189,26 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void didChangeDependencies() { super.didChangeDependencies(); loadChurchName(); }
 
+  void _openMenu() {
+    showModalBottomSheet<void>(context: context, builder: (sheet) => SafeArea(child: ListView(shrinkWrap: true, children: [
+      for (var i = 0; i < items.length; i++) ListTile(leading: Icon(items[i].icon), title: Text(items[i].label), selected: i == selected, onTap: () { Navigator.pop(sheet); setState(() => selected = i); }),
+    ])));
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 850;
+      final compactNav = items.length > 5;
+      final barItems = compactNav ? items.take(4).toList() : items;
       return Scaffold(
         appBar: AppBar(
-          actions: [Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: Center(child: Text(isAdmin ? 'ADM' : (accounting ? 'Comptabilité' : 'Services')))), IconButton(tooltip: 'Déconnexion', onPressed: widget.onLogout, icon: const Icon(Icons.logout))],
+          actions: [Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: Center(child: Text('${me.bureau.label} · ${isAdmin ? 'Administrateur' : 'Employé'}', style: const TextStyle(fontSize: 12)))), IconButton(tooltip: 'Déconnexion', onPressed: widget.onLogout, icon: const Icon(Icons.logout))],
           title: Row(children: [
-            Container(width: 36, height: 36, decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(9)), child: const Icon(Icons.church, color: navy)),
+            ClipRRect(borderRadius: BorderRadius.circular(9), child: Image.asset('assets/mbb_icon.png', width: 36, height: 36)),
             const SizedBox(width: 10),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('MBB', style: const TextStyle(fontWeight: FontWeight.bold)),
+              const Text('MBB', style: TextStyle(fontWeight: FontWeight.bold)),
               Text(churchName, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal), overflow: TextOverflow.ellipsis),
             ])),
           ]),
@@ -191,75 +217,128 @@ class _HomeShellState extends State<HomeShell> {
           if (wide) NavigationRail(
             selectedIndex: selected, onDestinationSelected: (v) => setState(() => selected = v),
             labelType: NavigationRailLabelType.all,
-            destinations: List.generate(labels.length, (i) => NavigationRailDestination(icon: Icon(icons[i]), label: Text(labels[i]))),
+            destinations: [for (final it in items) NavigationRailDestination(icon: Icon(it.icon), label: Text(it.label))],
           ),
-          Expanded(child: IndexedStack(index: selected, children: pages)),
+          Expanded(child: IndexedStack(index: selected, children: [for (final it in items) it.page])),
         ]),
         bottomNavigationBar: wide ? null : NavigationBar(
-          selectedIndex: selected > 4 ? 0 : selected,
-          onDestinationSelected: (v) => setState(() => selected = v == 4 ? pages.length - 1 : v),
-          destinations: const [
-            NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Accueil'),
-            NavigationDestination(icon: Icon(Icons.people_alt_outlined), label: 'Membres'),
-            NavigationDestination(icon: Icon(Icons.fact_check_outlined), label: 'Présences'),
-            NavigationDestination(icon: Icon(Icons.account_balance_wallet_outlined), label: 'Finances'),
-            NavigationDestination(icon: Icon(Icons.menu), label: 'Menu'),
+          selectedIndex: compactNav ? (selected < 4 ? selected : 4) : selected,
+          onDestinationSelected: (v) { if (compactNav && v == 4) { _openMenu(); } else { setState(() => selected = v); } },
+          destinations: [
+            for (final it in barItems) NavigationDestination(icon: Icon(it.icon), label: it.label.length > 12 ? it.label.split(' ').first : it.label),
+            if (compactNav) const NavigationDestination(icon: Icon(Icons.menu), label: 'Menu'),
           ],
         ),
-        floatingActionButton: !wide && selected == 0 ? FloatingActionButton.extended(
-          onPressed: () => setState(() => selected = 1), icon: const Icon(Icons.person_add_alt_1), label: const Text('Ajouter membre'),
-        ) : null,
       );
     });
   }
 }
 
+class AccountsPage extends StatefulWidget {
+  const AccountsPage({super.key, required this.principal});
+  final Principal principal;
+  @override State<AccountsPage> createState() => _AccountsPageState();
+}
+class _AccountsPageState extends State<AccountsPage> {
+  Future<void> _guard(Future<void> Function() action) async {
+    try { await action(); }
+    on ArgumentError catch (e) { if (mounted) showMessage(context, '${e.message}'); }
+    on AuthorizationException catch (e) { if (mounted) showMessage(context, e.message); }
+    catch (_) { if (mounted) showMessage(context, 'Opération impossible (identifiant déjà utilisé ?).'); }
+    if (mounted) setState(() {});
+  }
+  Future<void> _create() async {
+    final user = TextEditingController(); final pass = TextEditingController(); bool admin = false;
+    final ok = await showDialog<bool>(context: context, builder: (d) => StatefulBuilder(builder: (c, refresh) => AlertDialog(
+      title: Text('Nouveau compte — ${widget.principal.bureau.label}'),
+      content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(controller: user, decoration: const InputDecoration(labelText: 'Identifiant')), const SizedBox(height: 10),
+        TextField(controller: pass, obscureText: true, decoration: const InputDecoration(labelText: 'Mot de passe initial (8 caractères min.)')),
+        SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Administrateur de ce bureau'), value: admin, onChanged: (v) => refresh(() => admin = v)),
+      ])),
+      actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Annuler')), FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Créer'))],
+    )));
+    if (ok == true) { await _guard(() => AuthService.createUser(widget.principal, user.text, pass.text, admin: admin)); }
+    user.dispose(); pass.dispose();
+  }
+  Future<void> _reset(Map<String, Object?> u) async {
+    final pass = TextEditingController();
+    final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(
+      title: Text('Nouveau mot de passe — ${u['username']}'),
+      content: TextField(controller: pass, obscureText: true, decoration: const InputDecoration(labelText: 'Mot de passe (8 caractères min.)')),
+      actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Annuler')), FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Changer'))],
+    ));
+    if (ok == true) { await _guard(() => AuthService.resetPassword(widget.principal, u['id'] as int, pass.text)); }
+    pass.dispose();
+  }
+  @override Widget build(BuildContext context) => Scaffold(backgroundColor: Colors.transparent,
+    floatingActionButton: FloatingActionButton.extended(onPressed: _create, icon: const Icon(Icons.person_add_alt_1), label: const Text('Nouveau compte')),
+    body: FutureBuilder<List<Map<String, Object?>>>(future: AuthService.listUsers(widget.principal), builder: (context, snap) {
+      if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+      return ListView(padding: const EdgeInsets.all(12), children: [
+        Padding(padding: const EdgeInsets.all(8), child: Text('Comptes du bureau « ${widget.principal.bureau.label} »', style: Theme.of(context).textTheme.titleLarge)),
+        ...snap.data!.map((u) => Card(child: ListTile(
+          leading: Icon(u['role'] == 'ADM' ? Icons.admin_panel_settings_outlined : Icons.person_outline, color: u['active'] == 1 ? navy : Colors.grey),
+          title: Text('${u['username']}'), subtitle: Text('${u['role'] == 'ADM' ? 'Administrateur' : 'Employé'}${u['active'] == 1 ? '' : ' · désactivé'}'),
+          trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'pwd') _reset(u); if (v == 'toggle') _guard(() => AuthService.setActive(widget.principal, u['id'] as int, u['active'] != 1)); },
+            itemBuilder: (_) => [const PopupMenuItem(value: 'pwd', child: Text('Changer le mot de passe')), PopupMenuItem(value: 'toggle', child: Text(u['active'] == 1 ? 'Désactiver' : 'Réactiver'))]),
+        ))),
+      ]);
+    }));
+}
+
 class DashboardPage extends StatefulWidget {
-  const DashboardPage({super.key});
+  const DashboardPage({super.key, required this.bureau});
+  final Bureau bureau;
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
 class _DashboardPageState extends State<DashboardPage> {
+  bool get finance => widget.bureau == Bureau.comptabilite;
+  // Seules les données du bureau de l'utilisateur sont lues.
   Future<Map<String, dynamic>> stats() async {
     final db = AppDatabase.instance;
-    return {
-      'members': await db.count('members'),
-      'families': await db.count('families'),
-      'services': await db.count('services'),
-      'income': await db.financeTotal('Recette'),
-      'expenses': await db.financeTotal('Dépense'),
-    };
+    if (finance) {
+      return {'income': await db.financeTotal('Recette'), 'expenses': await db.financeTotal('Dépense'), 'count': await db.count('transactions')};
+    }
+    return {'members': await db.count('members'), 'families': await db.count('families'), 'services': await db.count('services'), 'announcements': await db.count('announcements')};
   }
   @override
   Widget build(BuildContext context) => FutureBuilder<Map<String, dynamic>>(
     future: stats(), builder: (context, snap) {
       if (!snap.hasData) return const Center(child: CircularProgressIndicator());
       final s = snap.data!;
-      final income = s['income'] as double; final expenses = s['expenses'] as double;
-      return RefreshIndicator(onRefresh: () async { setState(() {}); await stats(); }, child: ListView(
+      return RefreshIndicator(onRefresh: () async { setState(() {}); }, child: ListView(
         padding: const EdgeInsets.all(18), children: [
-          Text('Bienvenue dans MBB', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
-          const Text('Gestion de votre église, même sans internet.'),
+          Text(widget.bureau.label, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+          const Text('Fonctionne sans internet : les données restent sur cet appareil.'),
           const SizedBox(height: 18),
-          Wrap(spacing: 12, runSpacing: 12, children: [
-            StatCard(title: 'Membres', value: '${s['members']}', icon: Icons.people, color: navy),
-            StatCard(title: 'Familles', value: '${s['families']}', icon: Icons.family_restroom, color: teal),
-            StatCard(title: 'Cultes / réunions', value: '${s['services']}', icon: Icons.church, color: Colors.deepPurple),
-            StatCard(title: 'Solde', value: money.format(income - expenses), icon: Icons.account_balance_wallet, color: Colors.green),
-          ]),
-          const SizedBox(height: 18),
-          Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Résumé financier', style: Theme.of(context).textTheme.titleLarge),
-            const SizedBox(height: 10),
-            _moneyLine('Recettes', income, Colors.green),
-            _moneyLine('Dépenses', expenses, Colors.red),
-            const Divider(),
-            _moneyLine('Solde', income - expenses, navy),
-          ]))),
-          const SizedBox(height: 12),
-          const Card(child: ListTile(leading: Icon(Icons.cloud_off, color: teal), title: Text('Mode hors ligne'), subtitle: Text('Les informations sont conservées dans une base SQLite locale sur cet appareil.'))),
-          const SizedBox(height: 8),
-          Text('Note : pour transférer les données entre appareils, utilisez Sauvegarde et restaurez le fichier sur l’autre appareil.', style: Theme.of(context).textTheme.bodySmall),
+          if (finance) ...[
+            Builder(builder: (context) {
+              final income = s['income'] as double; final expenses = s['expenses'] as double;
+              return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Wrap(spacing: 12, runSpacing: 12, children: [
+                  StatCard(title: 'Opérations', value: '${s['count']}', icon: Icons.receipt_long, color: teal),
+                  StatCard(title: 'Solde', value: money.format(income - expenses), icon: Icons.account_balance_wallet, color: Colors.green),
+                ]),
+                const SizedBox(height: 18),
+                Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text('Résumé financier', style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 10),
+                  _moneyLine('Recettes', income, Colors.green),
+                  _moneyLine('Dépenses', expenses, Colors.red),
+                  const Divider(),
+                  _moneyLine('Solde', income - expenses, navy),
+                ]))),
+              ]);
+            }),
+          ] else
+            Wrap(spacing: 12, runSpacing: 12, children: [
+              StatCard(title: 'Membres', value: '${s['members']}', icon: Icons.people, color: navy),
+              StatCard(title: 'Familles', value: '${s['families']}', icon: Icons.family_restroom, color: teal),
+              StatCard(title: 'Cultes / réunions', value: '${s['services']}', icon: Icons.church, color: Colors.deepPurple),
+              StatCard(title: 'Annonces', value: '${s['announcements']}', icon: Icons.campaign, color: Colors.orange),
+            ]),
         ],
       ));
     });
@@ -316,7 +395,8 @@ class FieldSpec {
 }
 
 class MembersPage extends StatefulWidget {
-  const MembersPage({super.key});
+  const MembersPage({super.key, required this.principal});
+  final Principal principal;
   @override State<MembersPage> createState() => _MembersPageState();
 }
 
@@ -398,6 +478,7 @@ class _MembersPageState extends State<MembersPage> {
   }
 
   Future<void> remove(Map<String, Object?> r) async {
+    if (!AccessPolicy.can(widget.principal, Permission.membersDelete)) { showMessage(context, 'Suppression réservée à l’administrateur du bureau.'); return; }
     final yes = await confirmDelete(context, '${r['first_name']} ${r['last_name']}');
     if (yes) { await AppDatabase.instance.delete('members', where: 'id = ?', whereArgs: [r['id']]); await AppDatabase.instance.log('DELETE_MEMBER', '${r['id']}'); if (mounted) setState(() {}); }
   }
@@ -415,7 +496,7 @@ class _MembersPageState extends State<MembersPage> {
           final r = rows[i]; final photo = '${r['photo_path'] ?? ''}';
           return Card(child: ListTile(leading: CircleAvatar(backgroundColor: navy, backgroundImage: photo.isNotEmpty && File(photo).existsSync() ? FileImage(File(photo)) : null, child: photo.isEmpty ? Text('${r['first_name']}'.isNotEmpty ? '${r['first_name']}'.substring(0, 1).toUpperCase() : '?', style: const TextStyle(color: Colors.white)) : null),
             title: Text('${r['first_name']} ${r['last_name']}'), subtitle: Text('${r['phone'] ?? ''}  ${r['email'] ?? ''}\n${r['baptized'] == 1 ? 'Baptisé' : 'Non baptisé'} · ${r['church_role'] ?? 'Rôle non défini'}'), isThreeLine: true,
-            trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') _memberForm(member: r); if (v == 'delete') remove(r); }, itemBuilder: (_) => const [PopupMenuItem(value: 'edit', child: Text('Modifier')), PopupMenuItem(value: 'delete', child: Text('Supprimer'))])));
+            trailing: PopupMenuButton<String>(onSelected: (v) { if (v == 'edit') _memberForm(member: r); if (v == 'delete') remove(r); }, itemBuilder: (_) => [const PopupMenuItem(value: 'edit', child: Text('Modifier')), if (AccessPolicy.can(widget.principal, Permission.membersDelete)) const PopupMenuItem(value: 'delete', child: Text('Supprimer'))])));
         });
       })),
     ])),
@@ -545,16 +626,17 @@ class _AttendancePageState extends State<AttendancePage> {
   ]);
 }
 
-class FinancePage extends StatefulWidget { const FinancePage({super.key}); @override State<FinancePage> createState() => _FinancePageState(); }
+class FinancePage extends StatefulWidget { const FinancePage({super.key, required this.principal}); final Principal principal; @override State<FinancePage> createState() => _FinancePageState(); }
 class _FinancePageState extends State<FinancePage> {
-  Future<void> add(String kind) async => showFormDialog(context, kind == 'Recette' ? 'Ajouter une recette' : 'Ajouter une dépense', [
+  Future<void> add(String kind) async { if (!AccessPolicy.can(widget.principal, Permission.financeRecord)) { showMessage(context, 'Action non autorisée.'); return; } await _addForm(kind); }
+  Future<void> _addForm(String kind) async => showFormDialog(context, kind == 'Recette' ? 'Ajouter une recette' : 'Ajouter une dépense', [
     const FieldSpec('category', 'Catégorie', required: true), FieldSpec('amount', 'Montant HTG', required: true, numeric: true),
     FieldSpec('transaction_date', 'Date (AAAA-MM-JJ)', required: true, initial: today()), const FieldSpec('description', 'Description'),
   ], (v) async {
     final amount = double.tryParse(v['amount']!.replaceAll(',', '.'));
     if (amount == null || amount <= 0) { if (mounted) showMessage(context, 'Entrez un montant positif valide.'); return; }
     await AppDatabase.instance.insert('transactions', {...v, 'amount': amount, 'kind': kind, 'created_at': nowIso()});
-    await AppDatabase.instance.log('CREATE_TRANSACTION', '$kind ${v['category']} $amount');
+    await AppDatabase.instance.log('CREATE_TRANSACTION', '$kind ${v['category']} $amount', username: widget.principal.username);
     if (mounted) setState(() {});
   });
   @override
@@ -570,7 +652,7 @@ class _FinancePageState extends State<FinancePage> {
       return ListView(padding: const EdgeInsets.all(12), children: rows.map((r) {
         final isIncome = r['kind'] == 'Recette'; final amount = (r['amount'] as num).toDouble();
         return Card(child: ListTile(leading: CircleAvatar(backgroundColor: (isIncome ? Colors.green : Colors.red).withValues(alpha: .12), child: Icon(isIncome ? Icons.arrow_downward : Icons.arrow_upward, color: isIncome ? Colors.green : Colors.red)),
-          title: Text('${r['category']} — ${money.format(amount)}'), subtitle: Text('${r['transaction_date']} · ${r['description']}'), trailing: IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { if (await confirmDelete(context, 'cette opération')) { await AppDatabase.instance.delete('transactions', where: 'id = ?', whereArgs: [r['id']]); await AppDatabase.instance.log('DELETE_TRANSACTION', '${r['id']}'); if (mounted) setState(() {}); } })));
+          title: Text('${r['category']} — ${money.format(amount)}'), subtitle: Text('${r['transaction_date']} · ${r['description']}'), trailing: AccessPolicy.can(widget.principal, Permission.financeVoid) ? IconButton(icon: const Icon(Icons.delete_outline), onPressed: () async { if (await confirmDelete(context, 'cette opération')) { AccessPolicy.require(widget.principal, Permission.financeVoid); await AppDatabase.instance.delete('transactions', where: 'id = ?', whereArgs: [r['id']]); await AppDatabase.instance.log('DELETE_TRANSACTION', '${r['id']}', username: widget.principal.username); if (mounted) setState(() {}); } }) : null));
       }).toList());
     })),
   ]);
@@ -658,7 +740,7 @@ class BackupPage extends StatelessWidget {
     Card(child: ListTile(leading: const Icon(Icons.restore, color: navy), title: const Text('Restaurer une base de données'), subtitle: const Text('Remplacer la base locale à partir d’un fichier .db.'), trailing: const Icon(Icons.chevron_right), onTap: () => _import(context))),
     Card(child: ListTile(leading: const Icon(Icons.history), title: const Text('Exporter l’historique des actions'), subtitle: const Text('Partager l’historique au format CSV.'), trailing: const Icon(Icons.chevron_right), onTap: () => _shareAudit(context))),
     const SizedBox(height: 12),
-    const Card(child: ListTile(leading: Icon(Icons.warning_amber, color: Colors.orange), title: Text('Important'), subtitle: Text('Le fichier de sauvegarde n’est pas chiffré. Ne le partagez pas publiquement. Le système de comptes et permissions avancées reste à compléter avant un usage sensible en production.'))),
+    const Card(child: ListTile(leading: Icon(Icons.warning_amber, color: Colors.orange), title: Text('Important'), subtitle: Text('Cette sauvegarde contient les données des DEUX bureaux (une seule base locale) et n’est pas chiffrée : ne la confiez qu’à une personne autorisée. Une exportation séparée par bureau reste à développer. Le système de comptes et permissions avancées reste à compléter avant un usage sensible en production.'))),
   ]);
 }
 
