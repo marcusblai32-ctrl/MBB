@@ -55,3 +55,7 @@ Les données sont locales à chaque appareil dans cette version. Pour partager l
 Le formulaire des membres permet maintenant de sélectionner une photo depuis l'appareil, de conserver une copie dans le répertoire privé de l'application, de renseigner la famille, le statut de baptême et le rôle, et de relier le membre aux groupes/classes dynamiques existants. La classe d'école du dimanche est choisie parmi les éléments dont le type contient « classe » ou « école ».
 
 **État honnête du projet :** cette archive est une version de travail, pas encore une livraison finale validée. L'environnement de préparation ne dispose pas du SDK Flutter/Dart pour exécuter `flutter analyze`, `flutter test` ou les builds. Il faut laisser GitHub Actions effectuer ces vérifications, puis corriger tout éventuel échec avant d'utiliser l'application avec de vraies données.
+
+
+## Bases de données
+Deux bases locales séparées : `mbb_comptabilite.db` et `mbb_cartes_annonces.db`. À la première ouverture après mise à jour, l'ancienne base unique est migrée automatiquement (copie conservée en `.legacy.bak`).
