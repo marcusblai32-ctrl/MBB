@@ -9,9 +9,9 @@ class AuthService {
 
   static const minPasswordLength = 8;
 
-  static String labelOf(Bureau b) => b == Bureau.comptabilite
-      ? 'Comptabilité'
-      : 'Services des cartes et annonces';
+  static String labelOf(Bureau b) => AppDatabase.userLabel(b);
+
+  static AppDatabase _db(Bureau b) => AppDatabase.forBureau(b);
 
   static Bureau bureauFromLabel(String label) => label == 'Comptabilité'
       ? Bureau.comptabilite
@@ -34,8 +34,8 @@ class AuthService {
 
   static String normalizeUsername(String u) => u.trim().toLowerCase();
 
-  static Future<Principal?> login(String username, String password) async {
-    final db = AppDatabase.instance;
+  static Future<Principal?> login(Bureau bureau, String username, String password) async {
+    final db = _db(bureau);
     final rows = await db.query('users',
         where: 'username = ? AND active = 1',
         whereArgs: [normalizeUsername(username)]);
@@ -60,12 +60,14 @@ class AuthService {
       return null;
     }
     final p = principalFrom(row);
+    if (p.bureau != bureau) return null; // sécurité : compte d'un autre bureau
+    AppDatabase.activeBureau = bureau;
     await db.log('LOGIN', labelOf(p.bureau), username: p.username);
     return p;
   }
 
   static Future<bool> bureauHasAdmin(Bureau b) async {
-    final rows = await AppDatabase.instance.query('users',
+    final rows = await _db(b).query('users',
         where: "service_access = ? AND role = 'ADM' AND active = 1",
         whereArgs: [labelOf(b)]);
     return rows.isNotEmpty;
@@ -92,7 +94,7 @@ class AuthService {
       'active': 1,
       'created_at': DateTime.now().toIso8601String(),
     };
-    final id = await AppDatabase.instance.insert('users', values);
+    final id = await _db(bureau).insert('users', values);
     return {...values, 'id': id};
   }
 
@@ -109,7 +111,8 @@ class AuthService {
           'Ce bureau possède déjà un administrateur.');
     }
     final row = await _insertUser(bureau, username, password, true);
-    await AppDatabase.instance.log('BOOTSTRAP_ADMIN', labelOf(bureau),
+    AppDatabase.activeBureau = bureau;
+    await _db(bureau).log('BOOTSTRAP_ADMIN', labelOf(bureau),
         username: '${row['username']}');
     return principalFrom(row);
   }
@@ -118,14 +121,14 @@ class AuthService {
       String password, {required bool admin}) async {
     AccessPolicy.require(actor, Permission.usersManage);
     await _insertUser(actor.bureau, username, password, admin);
-    await AppDatabase.instance.log(
+    await _db(actor.bureau).log(
         'CREATE_USER', '${normalizeUsername(username)} ${admin ? 'admin' : 'employé'}',
         username: actor.username);
   }
 
   static Future<List<Map<String, Object?>>> listUsers(Principal actor) async {
     AccessPolicy.require(actor, Permission.usersManage);
-    return AppDatabase.instance.query('users',
+    return _db(actor.bureau).query('users',
         where: 'service_access = ?',
         whereArgs: [labelOf(actor.bureau)],
         orderBy: 'username');
@@ -133,7 +136,7 @@ class AuthService {
 
   static Future<Map<String, Object?>> _target(Principal actor, int id) async {
     AccessPolicy.require(actor, Permission.usersManage);
-    final rows = await AppDatabase.instance.query('users',
+    final rows = await _db(actor.bureau).query('users',
         where: 'id = ? AND service_access = ?',
         whereArgs: [id, labelOf(actor.bureau)]);
     if (rows.isEmpty) {
@@ -149,7 +152,7 @@ class AuthService {
         throw AuthorizationException('Vous ne pouvez pas désactiver votre propre compte.');
       }
       if (t['role'] == 'ADM') {
-        final admins = await AppDatabase.instance.query('users',
+        final admins = await _db(actor.bureau).query('users',
             where: "service_access = ? AND role = 'ADM' AND active = 1",
             whereArgs: [labelOf(actor.bureau)]);
         if (admins.length <= 1) {
@@ -157,9 +160,9 @@ class AuthService {
         }
       }
     }
-    await AppDatabase.instance.update('users', {'active': active ? 1 : 0},
+    await _db(actor.bureau).update('users', {'active': active ? 1 : 0},
         where: 'id = ?', whereArgs: [id]);
-    await AppDatabase.instance.log(
+    await _db(actor.bureau).log(
         active ? 'ACTIVATE_USER' : 'DEACTIVATE_USER', '${t['username']}',
         username: actor.username);
   }
@@ -169,10 +172,10 @@ class AuthService {
     final t = await _target(actor, id);
     final err = validatePassword(newPassword);
     if (err != null) throw ArgumentError(err);
-    await AppDatabase.instance.update(
+    await _db(actor.bureau).update(
         'users', {'password_hash': PasswordHasher.hash(newPassword), 'salt': ''},
         where: 'id = ?', whereArgs: [id]);
-    await AppDatabase.instance.log('RESET_PASSWORD', '${t['username']}',
+    await _db(actor.bureau).log('RESET_PASSWORD', '${t['username']}',
         username: actor.username);
   }
 
@@ -181,7 +184,7 @@ class AuthService {
     if (!AccessPolicy.writesEnabled) {
       throw AuthorizationException('Appareil en mode consultation : modification impossible.');
     }
-    final rows = await AppDatabase.instance
+    final rows = await _db(me.bureau)
         .query('users', where: 'id = ?', whereArgs: [me.userId]);
     if (rows.isEmpty ||
         !PasswordHasher.verify(current, '${rows.first['password_hash']}')) {
@@ -189,10 +192,10 @@ class AuthService {
     }
     final err = validatePassword(next);
     if (err != null) throw ArgumentError(err);
-    await AppDatabase.instance.update(
+    await _db(me.bureau).update(
         'users', {'password_hash': PasswordHasher.hash(next)},
         where: 'id = ?', whereArgs: [me.userId]);
-    await AppDatabase.instance
+    await _db(me.bureau)
         .log('CHANGE_PASSWORD', '', username: me.username);
   }
 }
