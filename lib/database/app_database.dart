@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -22,7 +23,7 @@ class AppDatabase {
     final path = p.join(dir.path, 'mbb_database.db');
     _db = await openDatabase(
       path,
-      version: 3,
+      version: 4,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -86,6 +87,15 @@ class AppDatabase {
           final txInfo = await db.rawQuery('PRAGMA table_info(transactions)');
           if (!txInfo.any((row) => row['name'] == 'group_id')) await db.execute('ALTER TABLE transactions ADD COLUMN group_id INTEGER');
           if (!txInfo.any((row) => row['name'] == 'payment_method')) await db.execute("ALTER TABLE transactions ADD COLUMN payment_method TEXT NOT NULL DEFAULT ''");
+        }
+        if (oldVersion < 4) {
+          // Identité unique de chaque opération, pour l'échange entre appareils.
+          final info = await db.rawQuery('PRAGMA table_info(transactions)');
+          if (!info.any((row) => row['name'] == 'uid')) await db.execute("ALTER TABLE transactions ADD COLUMN uid TEXT NOT NULL DEFAULT ''");
+          if (!info.any((row) => row['name'] == 'reference')) await db.execute("ALTER TABLE transactions ADD COLUMN reference TEXT NOT NULL DEFAULT ''");
+          await db.execute("UPDATE transactions SET uid = lower(hex(randomblob(16))) WHERE uid = ''");
+          await db.execute("UPDATE transactions SET reference = 'TX-' || upper(substr(uid, 1, 8)) WHERE reference = ''");
+          await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_uid ON transactions(uid)');
         }
       },
       onCreate: (db, version) async {
@@ -203,9 +213,12 @@ class AppDatabase {
             description TEXT NOT NULL DEFAULT '',
             group_id INTEGER,
             payment_method TEXT NOT NULL DEFAULT '',
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            uid TEXT NOT NULL DEFAULT '',
+            reference TEXT NOT NULL DEFAULT ''
           )
         ''');
+        await db.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_uid ON transactions(uid)');
         await db.execute('''
           CREATE TABLE app_settings (
             key TEXT PRIMARY KEY,
@@ -235,25 +248,81 @@ class AppDatabase {
     return _db!;
   }
 
+  /// Ferme la base et oublie le handle : la prochaine requête la rouvre
+  /// (nécessaire après le remplacement du fichier lors d'une restauration).
+  Future<void> closeAndReset() async {
+    final db = _db;
+    _db = null;
+    if (db != null) await db.close();
+  }
+
+  /// Vérifie qu'un fichier est une sauvegarde MBB exploitable. Retourne un
+  /// message d'erreur, ou null si le fichier est valide.
+  static Future<String?> validateBackupFile(String path) async {
+    Database? probe;
+    try {
+      probe = await openReadOnlyDatabase(path);
+      final check = await probe.rawQuery('PRAGMA integrity_check');
+      if (check.isEmpty || '${check.first.values.first}' != 'ok') {
+        return 'Le fichier est endommagé (contrôle d’intégrité échoué).';
+      }
+      final tables = (await probe.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'"))
+          .map((r) => '${r['name']}').toSet();
+      for (final t in const ['users', 'transactions', 'members', 'app_settings']) {
+        if (!tables.contains(t)) return 'Ce fichier n’est pas une sauvegarde MBB (table « $t » absente).';
+      }
+      final v = (await probe.rawQuery('PRAGMA user_version')).first.values.first as int;
+      if (v > 3) return 'Sauvegarde créée par une version plus récente de MBB.';
+      return null;
+    } catch (_) {
+      return 'Le fichier n’est pas une base SQLite lisible.';
+    } finally {
+      await probe?.close();
+    }
+  }
+
   Future<List<Map<String, Object?>>> query(String table,
       {String? where, List<Object?>? whereArgs, String? orderBy}) async {
     final db = await database;
     return db.query(table, where: where, whereArgs: whereArgs, orderBy: orderBy);
   }
 
+  /// Vrai sur un appareil en consultation : toute écriture métier est refusée ici,
+  /// dans la couche données (seuls le journal d'audit et le renouvellement du
+  /// hachage d'un mot de passe restent permis).
+  static bool readOnly = false;
+
+  void _guardWrite(String table, {bool isUpdate = false}) {
+    if (!readOnly) return;
+    if (table == 'audit_logs' || (isUpdate && table == 'users')) return;
+    throw ReadOnlyDeviceException();
+  }
+
+  static String newUid() {
+    final r = Random.secure();
+    return List<int>.generate(16, (_) => r.nextInt(256)).map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
   Future<int> insert(String table, Map<String, Object?> values) async {
+    _guardWrite(table);
     final db = await database;
+    if (table == 'transactions' && '${values['uid'] ?? ''}'.isEmpty) {
+      final uid = newUid();
+      values = {...values, 'uid': uid, 'reference': 'TX-${uid.substring(0, 8).toUpperCase()}'};
+    }
     return db.insert(table, values, conflictAlgorithm: ConflictAlgorithm.abort);
   }
 
   Future<int> update(String table, Map<String, Object?> values,
       {required String where, required List<Object?> whereArgs}) async {
+    _guardWrite(table, isUpdate: true);
     final db = await database;
     return db.update(table, values, where: where, whereArgs: whereArgs);
   }
 
   Future<int> delete(String table,
       {required String where, required List<Object?> whereArgs}) async {
+    _guardWrite(table);
     final db = await database;
     return db.delete(table, where: where, whereArgs: whereArgs);
   }
@@ -273,13 +342,20 @@ class AppDatabase {
     return (rows.first['total'] as num).toDouble();
   }
 
-  Future<void> log(String action, String details) async {
+  Future<void> log(String action, String details, {String username = 'local'}) async {
     final db = await database;
     await db.insert('audit_logs', {
-      'username': 'local',
+      'username': username,
       'action': action,
       'details': details,
       'created_at': DateTime.now().toIso8601String(),
     });
   }
+}
+
+class ReadOnlyDeviceException implements Exception {
+  String get message =>
+      'Cet appareil est en mode consultation : l’enregistrement de données est réservé à l’appareil principal.';
+  @override
+  String toString() => message;
 }
