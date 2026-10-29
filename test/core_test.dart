@@ -82,6 +82,16 @@ void main() {
       expect(AccessPolicy.can(cardsEmp, Permission.membersDelete), isFalse);
       expect(AccessPolicy.can(cardsAdmin, Permission.membersDelete), isTrue);
     });
+    test('appareil en consultation : écritures refusées, lectures permises', () {
+      addTearDown(() => AccessPolicy.writesEnabled = true);
+      AccessPolicy.writesEnabled = false;
+      expect(AccessPolicy.can(compAdmin, Permission.financeRecord), isFalse);
+      expect(AccessPolicy.can(compAdmin, Permission.usersManage), isFalse);
+      expect(AccessPolicy.can(cardsAdmin, Permission.membersEdit), isFalse);
+      expect(AccessPolicy.can(compAdmin, Permission.financeView), isTrue);
+      expect(AccessPolicy.can(compAdmin, Permission.financeReport), isTrue);
+      expect(AccessPolicy.can(cardsEmp, Permission.cardsReport), isTrue);
+    });
     test('compte désactivé ou absent refusé', () {
       const off = Principal(userId: 5, username: 'e', bureau: Bureau.comptabilite, role: BureauRole.administrateur, active: false);
       expect(AccessPolicy.can(off, Permission.financeView), isFalse);
