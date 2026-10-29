@@ -21,6 +21,7 @@ jobs:
       - name: Generate Android platform if missing
         run: |
           if [ ! -d android ]; then flutter create --platforms=android --project-name mbb .; fi
+          sed -i 's/android:label="[^"]*"/android:label="MBB"/' android/app/src/main/AndroidManifest.xml
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: flutter analyze
@@ -47,6 +48,8 @@ jobs:
         shell: pwsh
         run: |
           if (!(Test-Path windows)) { flutter create --platforms=windows --project-name mbb . }
+          (Get-Content windows/CMakeLists.txt) -replace 'set\(BINARY_NAME "[^"]*"\)','set(BINARY_NAME "MBB")' | Set-Content windows/CMakeLists.txt
+          (Get-Content windows/runner/main.cpp) -replace 'window.Create\(L"[^"]*"','window.Create(L"MBB"' | Set-Content windows/runner/main.cpp
       - run: flutter pub get
       - run: flutter analyze
       - run: flutter test
@@ -55,8 +58,8 @@ jobs:
         shell: pwsh
         run: |
           $out = "build\windows\x64\runner\Release"
-          if (!(Test-Path "$out\mbb.exe")) { throw "mbb.exe was not found in $out" }
-          Copy-Item "$out\mbb.exe" "MBB.exe"
+          if (!(Test-Path "$out\MBB.exe")) { throw "MBB.exe was not found in $out" }
+          Copy-Item "$out\MBB.exe" "MBB.exe"
           Compress-Archive -Path "$out\*" -DestinationPath "MBB-Windows.zip" -Force
       - uses: actions/upload-artifact@v4
         with:
