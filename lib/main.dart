@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -8,7 +9,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'auth/auth_service.dart';
+import 'core/device_role.dart';
 import 'core/permissions.dart';
+import 'data/finance_exchange.dart';
 import 'database/app_database.dart';
 
 const navy = Color(0xFF17365D);
@@ -17,9 +20,20 @@ final money = NumberFormat.currency(locale: 'fr_FR', symbol: 'HTG ', decimalDigi
 String nowIso() => DateTime.now().toIso8601String();
 String today() => DateFormat('yyyy-MM-dd').format(DateTime.now());
 
+final messengerKey = GlobalKey<ScaffoldMessengerState>();
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DeviceRoleStore.load();
   await AppDatabase.instance.database;
+  // Une écriture refusée sur un appareil en consultation ne doit jamais échouer en silence.
+  PlatformDispatcher.instance.onError = (error, stack) {
+    if (error is ReadOnlyDeviceException) {
+      messengerKey.currentState?.showSnackBar(SnackBar(content: Text(error.message)));
+      return true;
+    }
+    return false;
+  };
   runApp(const MBBApp());
 }
 
@@ -28,6 +42,7 @@ class MBBApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey: messengerKey,
       title: 'MBB',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
@@ -166,7 +181,7 @@ class _HomeShellState extends State<HomeShell> {
     final extra = <_NavItem>[
       if (AccessPolicy.can(me, Permission.usersManage)) _NavItem('Comptes', Icons.manage_accounts_outlined, AccountsPage(principal: me)),
       if (isAdmin) const _NavItem('Paramètres', Icons.settings_outlined, SettingsPage()),
-      if (AccessPolicy.can(me, Permission.backupManage)) const _NavItem('Sauvegarde', Icons.backup_outlined, BackupPage()),
+      if (AccessPolicy.can(me, Permission.backupManage)) _NavItem('Sauvegarde', Icons.backup_outlined, BackupPage(principal: me)),
     ];
     if (me.bureau == Bureau.comptabilite) {
       items = [dash, _NavItem('Comptabilité', Icons.account_balance_wallet_outlined, FinancePage(principal: me)), ...extra];
@@ -213,13 +228,16 @@ class _HomeShellState extends State<HomeShell> {
             ])),
           ]),
         ),
-        body: Row(children: [
+        body: Column(children: [
+          ValueListenableBuilder<DeviceRole>(valueListenable: DeviceRoleStore.notifier, builder: (_, role, __) => role == DeviceRole.principal ? const SizedBox.shrink() : Container(width: double.infinity, color: Colors.orange.shade100, padding: const EdgeInsets.all(8), child: const Text('Mode consultation : cet appareil est en lecture seule. Les données ne s’enregistrent que sur l’appareil principal.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12)))),
+          Expanded(child: Row(children: [
           if (wide) NavigationRail(
             selectedIndex: selected, onDestinationSelected: (v) => setState(() => selected = v),
             labelType: NavigationRailLabelType.all,
             destinations: [for (final it in items) NavigationRailDestination(icon: Icon(it.icon), label: Text(it.label))],
           ),
           Expanded(child: IndexedStack(index: selected, children: [for (final it in items) it.page])),
+        ])),
         ]),
         bottomNavigationBar: wide ? null : NavigationBar(
           selectedIndex: compactNav ? (selected < 4 ? selected : 4) : selected,
@@ -684,6 +702,8 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(18), children: [
     Text('Configuration', style: Theme.of(context).textTheme.headlineMedium),
     const SizedBox(height: 16),
+    const DeviceRoleCard(),
+    const SizedBox(height: 16),
     TextField(controller: church, decoration: const InputDecoration(labelText: 'Nom de l’église')),
     const SizedBox(height: 12), TextField(controller: app, decoration: const InputDecoration(labelText: 'Nom de l’application affiché dans les paramètres')),
     const SizedBox(height: 12), DropdownButtonFormField<String>(initialValue: language, decoration: const InputDecoration(labelText: 'Langue de l’interface'), items: const [DropdownMenuItem(value: 'Français', child: Text('Français')), DropdownMenuItem(value: 'Kreyòl ayisyen', child: Text('Kreyòl ayisyen'))], onChanged: (v) { if (v != null) setState(() => language = v); }),
@@ -693,7 +713,40 @@ class _SettingsPageState extends State<SettingsPage> {
 }
 
 class BackupPage extends StatelessWidget {
-  const BackupPage({super.key});
+  const BackupPage({super.key, required this.principal});
+  final Principal principal;
+  Future<void> _exportFinance(BuildContext context) async {
+    try {
+      final r = await FinanceExchange.export(principal);
+      final dir = await getTemporaryDirectory();
+      final file = File(p.join(dir.path, 'MBB_Comptabilite_${today()}.json'));
+      await file.writeAsString(r.json);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Échange MBB Comptabilité'));
+      if (context.mounted && r.skipped > 0) showMessage(context, '${r.skipped} ligne(s) à montant nul non exportée(s).');
+    } catch (e) { if (context.mounted) showMessage(context, 'Échec de l’exportation : $e'); }
+  }
+  Future<void> _importFinance(BuildContext context) async {
+    try {
+      final picked = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['json'], withData: false);
+      if (picked == null || picked.files.single.path == null) return;
+      final raw = await File(picked.files.single.path!).readAsString();
+      final preview = await FinanceExchange.preview(principal, raw);
+      if (!context.mounted) return;
+      if (!preview.fileOk) {
+        await showDialog<void>(context: context, builder: (c) => AlertDialog(title: const Text('Fichier refusé'), content: Text(preview.fileErrors.join('\n')), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Fermer'))]));
+        return;
+      }
+      final plan = preview.plan!;
+      final details = [...plan.conflicts, ...plan.invalid].take(8).join('\n');
+      final go = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+        title: const Text('Résumé de l’importation'),
+        content: SingleChildScrollView(child: Text('${plan.summary()}\n\nRien n’est supprimé ni écrasé. Les conflits et lignes invalides sont ignorés.${details.isEmpty ? '' : '\n\n$details'}')),
+        actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuler')), if (plan.toAdd.isNotEmpty) FilledButton(onPressed: () => Navigator.pop(c, true), child: Text('Importer ${plan.toAdd.length}'))]));
+      if (go != true) return;
+      final n = await FinanceExchange.apply(principal, plan);
+      if (context.mounted) showMessage(context, '$n opération(s) importée(s). Une copie de sécurité a été créée avant l’importation.');
+    } catch (e) { if (context.mounted) showMessage(context, 'Échec de l’importation : $e'); }
+  }
   Future<void> _export(BuildContext context) async {
     try {
       final dbPath = await _databasePath();
@@ -709,17 +762,32 @@ class BackupPage extends StatelessWidget {
       final picked = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: ['db'], withData: false);
       if (picked == null || picked.files.single.path == null) return;
       if (!context.mounted) return;
-      final confirm = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: const Text('Restaurer une sauvegarde ?'), content: const Text('Cette opération remplace la base locale actuelle. Exportez d’abord une copie de sécurité.'), actions: [
+      final confirm = await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: const Text('Restaurer une sauvegarde ?'), content: const Text('Le fichier est d’abord vérifié, puis une copie de sécurité de la base actuelle est créée automatiquement avant le remplacement.'), actions: [
         TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuler')),
         FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Restaurer')),
       ]));
       if (confirm != true) return;
       final source = File(picked.files.single.path!);
+      final problem = await AppDatabase.validateBackupFile(source.path);
+      if (problem != null) { if (context.mounted) showMessage(context, problem); return; }
       final destination = await _databasePath();
-      final db = await AppDatabase.instance.database;
-      await db.close();
-      await source.copy(destination);
-      if (context.mounted) showMessage(context, 'Base restaurée. Fermez puis rouvrez MBB pour recharger les données.');
+      // Copie de sécurité automatique AVANT tout remplacement.
+      final safetyDir = Directory(p.join(p.dirname(destination), 'sauvegardes_auto'));
+      await safetyDir.create(recursive: true);
+      final safety = File(p.join(safetyDir.path, 'avant_restauration_${DateTime.now().millisecondsSinceEpoch}.db'));
+      await AppDatabase.instance.closeAndReset();
+      await File(destination).copy(safety.path);
+      try {
+        await source.copy(destination);
+      } catch (e) {
+        await safety.copy(destination); // retour à l'état précédent
+        rethrow;
+      }
+      await AppDatabase.instance.log('BACKUP_RESTORE', 'copie de sécurité : ${safety.path}');
+      // Une sauvegarde provient d'un autre état : l'appareil repasse en consultation
+      // pour éviter deux appareils qui enregistrent. Réglage : Paramètres > Appareil principal.
+      await DeviceRoleStore.set(DeviceRole.consultation);
+      if (context.mounted) showMessage(context, 'Base restaurée (copie de sécurité conservée dans le dossier de l’application). Cet appareil est maintenant en mode consultation. Fermez puis rouvrez MBB ; un administrateur peut le remettre en appareil principal dans Paramètres.');
     } catch (e) { if (context.mounted) showMessage(context, 'Échec de la restauration : $e'); }
   }
   Future<void> _shareAudit(BuildContext context) async {
@@ -739,6 +807,11 @@ class BackupPage extends StatelessWidget {
     Card(child: ListTile(leading: const Icon(Icons.upload_file, color: teal), title: const Text('Exporter la base de données'), subtitle: const Text('Créer une copie complète de la base SQLite.'), trailing: const Icon(Icons.chevron_right), onTap: () => _export(context))),
     Card(child: ListTile(leading: const Icon(Icons.restore, color: navy), title: const Text('Restaurer une base de données'), subtitle: const Text('Remplacer la base locale à partir d’un fichier .db.'), trailing: const Icon(Icons.chevron_right), onTap: () => _import(context))),
     Card(child: ListTile(leading: const Icon(Icons.history), title: const Text('Exporter l’historique des actions'), subtitle: const Text('Partager l’historique au format CSV.'), trailing: const Icon(Icons.chevron_right), onTap: () => _shareAudit(context))),
+    if (AccessPolicy.can(principal, Permission.financeExport)) ...[
+      const SizedBox(height: 8),
+      Card(child: ListTile(leading: const Icon(Icons.swap_horiz, color: teal), title: const Text('Exporter la comptabilité (JSON)'), subtitle: const Text('Fichier d’échange vérifiable, réservé à la comptabilité.'), trailing: const Icon(Icons.chevron_right), onTap: () => _exportFinance(context))),
+      Card(child: ListTile(leading: const Icon(Icons.download_for_offline, color: navy), title: const Text('Importer la comptabilité (JSON)'), subtitle: const Text('Ajoute seulement les opérations nouvelles, avec résumé avant confirmation.'), trailing: const Icon(Icons.chevron_right), onTap: () => _importFinance(context))),
+    ],
     const SizedBox(height: 12),
     const Card(child: ListTile(leading: Icon(Icons.warning_amber, color: Colors.orange), title: Text('Important'), subtitle: Text('Cette sauvegarde contient les données des DEUX bureaux (une seule base locale) et n’est pas chiffrée : ne la confiez qu’à une personne autorisée. Une exportation séparée par bureau reste à développer. Le système de comptes et permissions avancées reste à compléter avant un usage sensible en production.'))),
   ]);
@@ -758,3 +831,30 @@ Future<bool> confirmDelete(BuildContext context, String item) async =>
         FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Supprimer')),
       ],
     )) ?? false;
+
+class DeviceRoleCard extends StatelessWidget {
+  const DeviceRoleCard({super.key});
+  Future<void> _toggle(BuildContext context, bool principal) async {
+    if (principal) {
+      final ok = await showDialog<bool>(context: context, builder: (d) => AlertDialog(
+        title: const Text('Faire de cet appareil l’appareil principal ?'),
+        content: const Text('Un seul appareil doit enregistrer les données. Avant de continuer, mettez l’ancien appareil principal en mode consultation, et vérifiez que cet appareil contient bien la dernière sauvegarde.'),
+        actions: [TextButton(onPressed: () => Navigator.pop(d, false), child: const Text('Annuler')), FilledButton(onPressed: () => Navigator.pop(d, true), child: const Text('Confirmer'))],
+      ));
+      if (ok != true) return;
+    }
+    await DeviceRoleStore.set(principal ? DeviceRole.principal : DeviceRole.consultation);
+    await AppDatabase.instance.log(principal ? 'DEVICE_PRINCIPAL' : 'DEVICE_CONSULTATION', '');
+  }
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<DeviceRole>(
+    valueListenable: DeviceRoleStore.notifier,
+    builder: (_, role, __) => Card(child: SwitchListTile(
+      secondary: const Icon(Icons.devices_outlined),
+      title: const Text('Appareil principal'),
+      subtitle: Text(role == DeviceRole.principal ? 'Cet appareil enregistre les données. Tous les autres doivent rester en consultation.' : 'Mode consultation : lecture, rapports et exportation seulement.'),
+      value: role == DeviceRole.principal,
+      onChanged: (v) => _toggle(context, v),
+    )),
+  );
+}
