@@ -13,9 +13,11 @@ import 'core/device_role.dart';
 import 'core/permissions.dart';
 import 'data/finance_exchange.dart';
 import 'database/app_database.dart';
+import 'domain/attendance_logic.dart';
+import 'domain/family_report.dart';
+import 'ui/design.dart';
+import 'core/periods.dart';
 
-const navy = Color(0xFF17365D);
-const teal = Color(0xFF16A6A1);
 final money = NumberFormat.currency(locale: 'fr_FR', symbol: 'HTG ', decimalDigits: 2);
 String nowIso() => DateTime.now().toIso8601String();
 String today() => DateFormat('yyyy-MM-dd').format(DateTime.now());
@@ -25,7 +27,7 @@ final messengerKey = GlobalKey<ScaffoldMessengerState>();
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await DeviceRoleStore.load();
-  await AppDatabase.instance.database;
+  await AppDatabase.openAll();
   // Une écriture refusée sur un appareil en consultation ne doit jamais échouer en silence.
   PlatformDispatcher.instance.onError = (error, stack) {
     if (error is ReadOnlyDeviceException) {
@@ -45,14 +47,7 @@ class MBBApp extends StatelessWidget {
       scaffoldMessengerKey: messengerKey,
       title: 'MBB',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: navy),
-        scaffoldBackgroundColor: const Color(0xFFF5F7FB),
-        appBarTheme: const AppBarTheme(backgroundColor: navy, foregroundColor: Colors.white),
-        cardTheme: CardThemeData(elevation: 1, color: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
-        inputDecorationTheme: const InputDecorationTheme(border: OutlineInputBorder()),
-      ),
+      theme: buildMbbTheme(),
       home: const AuthGate(),
     );
   }
@@ -81,6 +76,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   final username = TextEditingController();
   final password = TextEditingController();
+  Bureau bureau = Bureau.comptabilite;
   bool busy = false;
   String? error;
   List<Bureau> bureausWithoutAdmin = const [];
@@ -92,9 +88,9 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> login() async {
     setState(() { busy = true; error = null; });
     try {
-      final principal = await AuthService.login(username.text, password.text);
+      final principal = await AuthService.login(bureau, username.text, password.text);
       if (principal == null) {
-        setState(() => error = 'Identifiant ou mot de passe incorrect.');
+        setState(() => error = 'Identifiant ou mot de passe incorrect pour ce bureau.');
       } else {
         widget.onLogin(principal);
       }
@@ -102,19 +98,52 @@ class _LoginPageState extends State<LoginPage> {
     if (mounted) setState(() => busy = false);
   }
   @override void dispose() { username.dispose(); password.dispose(); super.dispose(); }
+
+  Widget _brandPanel() => Container(
+    decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: [MbbColors.deep, MbbColors.ink])),
+    padding: const EdgeInsets.all(48),
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+      ClipRRect(borderRadius: BorderRadius.circular(22), child: Image.asset('assets/mbb_icon.png', width: 96, height: 96)),
+      const SizedBox(height: 24),
+      const Text('MBB', style: TextStyle(color: Colors.white, fontSize: 52, fontWeight: FontWeight.w900, letterSpacing: 2)),
+      const Text('Mission Baptiste Béraca', style: TextStyle(color: Color(0xFFBFD3F5), fontSize: 18)),
+      const SizedBox(height: 32),
+      for (final t in const ['100 % hors ligne : vos données restent sur l’appareil', 'Deux bureaux séparés : comptabilité, cartes et annonces', 'Rapports, sauvegarde et transfert contrôlés'])
+        Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: Row(children: [const Icon(Icons.check_circle, color: MbbColors.accent, size: 20), const SizedBox(width: 10), Expanded(child: Text(t, style: const TextStyle(color: Colors.white)))])),
+    ]),
+  );
+
+  Widget _form() => Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 420), child: ListView(shrinkWrap: true, padding: const EdgeInsets.all(28), children: [
+    Center(child: ClipRRect(borderRadius: BorderRadius.circular(18), child: Image.asset('assets/mbb_icon.png', width: 72, height: 72))),
+    const SizedBox(height: 14),
+    const Text('Connexion', textAlign: TextAlign.center, style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800)),
+    const Text('Choisissez votre bureau puis identifiez-vous', textAlign: TextAlign.center, style: TextStyle(color: MbbColors.muted)),
+    const SizedBox(height: 22),
+    SegmentedButton<Bureau>(
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(value: Bureau.comptabilite, icon: Icon(Icons.account_balance_wallet_outlined), label: Text('Comptabilité')),
+        ButtonSegment(value: Bureau.cartesAnnonces, icon: Icon(Icons.badge_outlined), label: Text('Cartes et annonces')),
+      ],
+      selected: {bureau},
+      onSelectionChanged: (v) => setState(() { bureau = v.first; error = null; }),
+    ),
+    const SizedBox(height: 16),
+    TextField(controller: username, decoration: const InputDecoration(labelText: 'Identifiant', prefixIcon: Icon(Icons.person_outline))),
+    const SizedBox(height: 12),
+    TextField(controller: password, obscureText: true, onSubmitted: (_) => login(), decoration: const InputDecoration(labelText: 'Mot de passe', prefixIcon: Icon(Icons.lock_outline))),
+    if (error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(error!, style: const TextStyle(color: MbbColors.danger))),
+    const SizedBox(height: 18),
+    FilledButton.icon(onPressed: busy ? null : login, icon: const Icon(Icons.login), label: Text(busy ? 'Connexion…' : 'Se connecter')),
+    if (bureausWithoutAdmin.contains(bureau)) TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SetupPage(bureaus: [bureau], onCreated: (user) { Navigator.of(context).pop(); widget.onLogin(user); }))), child: const Text('Première configuration de ce bureau')),
+    const SizedBox(height: 8),
+    const Text('Les comptes sont créés par l’administrateur de chaque bureau.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: MbbColors.muted)),
+  ])));
+
   @override Widget build(BuildContext context) => Scaffold(
-    body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 440), child: SingleChildScrollView(padding: const EdgeInsets.all(24), child: Card(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [
-      ClipRRect(borderRadius: BorderRadius.circular(18), child: Image.asset('assets/mbb_icon.png', width: 84, height: 84)),
-      const SizedBox(height: 12), const Text('MBB', style: TextStyle(fontSize: 30, fontWeight: FontWeight.bold, color: navy)),
-      const Text('Mission Baptiste Béraca', textAlign: TextAlign.center), const SizedBox(height: 24),
-      TextField(controller: username, decoration: const InputDecoration(labelText: 'Identifiant', prefixIcon: Icon(Icons.person_outline))),
-      const SizedBox(height: 12), TextField(controller: password, obscureText: true, onSubmitted: (_) => login(), decoration: const InputDecoration(labelText: 'Mot de passe', prefixIcon: Icon(Icons.lock_outline))),
-      if (error != null) Padding(padding: const EdgeInsets.only(top: 10), child: Text(error!, style: const TextStyle(color: Colors.red))),
-      const SizedBox(height: 18), SizedBox(width: double.infinity, child: FilledButton.icon(onPressed: busy ? null : login, icon: const Icon(Icons.login), label: Text(busy ? 'Connexion…' : 'Se connecter'))),
-      if (bureausWithoutAdmin.isNotEmpty) TextButton(onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => SetupPage(bureaus: bureausWithoutAdmin, onCreated: (user) { Navigator.of(context).pop(); widget.onLogin(user); }))), child: const Text('Première configuration d’un bureau')),
-      const SizedBox(height: 4),
-      const Text('Les comptes sont créés par l’administrateur de chaque bureau.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12, color: Colors.black54)),
-    ])))))),
+    body: LayoutBuilder(builder: (context, c) => c.maxWidth >= 900
+      ? Row(children: [Expanded(flex: 5, child: _brandPanel()), Expanded(flex: 4, child: _form())])
+      : _form()),
   );
 }
 
@@ -191,6 +220,8 @@ class _HomeShellState extends State<HomeShell> {
         const _NavItem('Familles', Icons.family_restroom, FamiliesPage()),
         const _NavItem('Cultes et réunions', Icons.church_outlined, ServicesPage()),
         const _NavItem('Présences', Icons.fact_check_outlined, AttendancePage()),
+        const _NavItem('Persévérance', Icons.emoji_events_outlined, PerseverancePage()),
+        const _NavItem('Rapports', Icons.assessment_outlined, ReportsPage()),
         const _NavItem('Classes et groupes', Icons.groups_outlined, GroupsPage()),
         const _NavItem('Annonces', Icons.campaign_outlined, AnnouncementsPage()),
         ...extra];
@@ -210,36 +241,58 @@ class _HomeShellState extends State<HomeShell> {
     ])));
   }
 
+  Widget _logo({double size = 38}) => ClipRRect(borderRadius: BorderRadius.circular(size * .24), child: Image.asset('assets/mbb_icon.png', width: size, height: size));
+
+  Widget _sidebarHeader() => Padding(padding: const EdgeInsets.fromLTRB(18, 20, 18, 8), child: Row(children: [
+    _logo(size: 44), const SizedBox(width: 12),
+    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      const Text('MBB', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 1.5)),
+      Text(churchName, style: const TextStyle(color: Color(0xFF9FB3D6), fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+    ])),
+  ]));
+
+  Widget _sidebarFooter() => Container(
+    margin: const EdgeInsets.all(12), padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(color: Colors.white.withValues(alpha: .07), borderRadius: BorderRadius.circular(14)),
+    child: Row(children: [
+      CircleAvatar(backgroundColor: MbbColors.blue, child: Text(me.username.isEmpty ? '?' : me.username[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))),
+      const SizedBox(width: 10),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(me.username, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+        Text('${isAdmin ? 'Administrateur' : 'Employé'} · ${me.bureau == Bureau.comptabilite ? 'Comptabilité' : 'Cartes et annonces'}', style: const TextStyle(color: Color(0xFF9FB3D6), fontSize: 11), maxLines: 2, overflow: TextOverflow.ellipsis),
+      ])),
+      IconButton(tooltip: 'Déconnexion', onPressed: widget.onLogout, icon: const Icon(Icons.logout, color: Color(0xFF9FB3D6))),
+    ]),
+  );
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       final wide = constraints.maxWidth >= 850;
+      final body = IndexedStack(index: selected, children: [for (final it in items) it.page]);
+      if (wide) {
+        return Scaffold(body: Row(children: [
+          SideNav(
+            items: [for (final it in items) (label: it.label, icon: it.icon)],
+            selected: selected, onSelect: (v) => setState(() => selected = v),
+            header: _sidebarHeader(), footer: _sidebarFooter(),
+          ),
+          Expanded(child: body),
+        ]));
+      }
       final compactNav = items.length > 5;
       final barItems = compactNav ? items.take(4).toList() : items;
       return Scaffold(
         appBar: AppBar(
-          actions: [Padding(padding: const EdgeInsets.symmetric(horizontal: 4), child: Center(child: Text('${me.bureau.label} · ${isAdmin ? 'Administrateur' : 'Employé'}', style: const TextStyle(fontSize: 12)))), IconButton(tooltip: 'Déconnexion', onPressed: widget.onLogout, icon: const Icon(Icons.logout))],
-          title: Row(children: [
-            ClipRRect(borderRadius: BorderRadius.circular(9), child: Image.asset('assets/mbb_icon.png', width: 36, height: 36)),
-            const SizedBox(width: 10),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('MBB', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text(churchName, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal), overflow: TextOverflow.ellipsis),
-            ])),
-          ]),
+          titleSpacing: 12,
+          title: Row(children: [_logo(size: 34), const SizedBox(width: 10), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('MBB', style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1)),
+            Text('${me.bureau == Bureau.comptabilite ? 'Comptabilité' : 'Cartes et annonces'} · ${isAdmin ? 'Administrateur' : 'Employé'}', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.normal), overflow: TextOverflow.ellipsis),
+          ]))]),
+          actions: [IconButton(tooltip: 'Déconnexion', onPressed: widget.onLogout, icon: const Icon(Icons.logout))],
         ),
-        body: Column(children: [
-          ValueListenableBuilder<DeviceRole>(valueListenable: DeviceRoleStore.notifier, builder: (_, role, __) => role == DeviceRole.principal ? const SizedBox.shrink() : Container(width: double.infinity, color: Colors.orange.shade100, padding: const EdgeInsets.all(8), child: const Text('Mode consultation : cet appareil est en lecture seule. Les données ne s’enregistrent que sur l’appareil principal.', textAlign: TextAlign.center, style: TextStyle(fontSize: 12)))),
-          Expanded(child: Row(children: [
-          if (wide) NavigationRail(
-            selectedIndex: selected, onDestinationSelected: (v) => setState(() => selected = v),
-            labelType: NavigationRailLabelType.all,
-            destinations: [for (final it in items) NavigationRailDestination(icon: Icon(it.icon), label: Text(it.label))],
-          ),
-          Expanded(child: IndexedStack(index: selected, children: [for (final it in items) it.page])),
-        ])),
-        ]),
-        bottomNavigationBar: wide ? null : NavigationBar(
+        body: body,
+        bottomNavigationBar: NavigationBar(
           selectedIndex: compactNav ? (selected < 4 ? selected : 4) : selected,
           onDestinationSelected: (v) { if (compactNav && v == 4) { _openMenu(); } else { setState(() => selected = v); } },
           destinations: [
@@ -328,9 +381,7 @@ class _DashboardPageState extends State<DashboardPage> {
       final s = snap.data!;
       return RefreshIndicator(onRefresh: () async { setState(() {}); }, child: ListView(
         padding: const EdgeInsets.all(18), children: [
-          Text(widget.bureau.label, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
-          const Text('Fonctionne sans internet : les données restent sur cet appareil.'),
-          const SizedBox(height: 18),
+          PageHeader(title: 'Tableau de bord', subtitle: '${widget.bureau.label} — fonctionne sans internet, vos données restent sur cet appareil.'),
           if (finance) ...[
             Builder(builder: (context) {
               final income = s['income'] as double; final expenses = s['expenses'] as double;
@@ -365,18 +416,6 @@ Widget _moneyLine(String label, double value, Color color) => Padding(
   padding: const EdgeInsets.symmetric(vertical: 5),
   child: Row(children: [Expanded(child: Text(label)), Text(money.format(value), style: TextStyle(fontWeight: FontWeight.bold, color: color))]),
 );
-
-class StatCard extends StatelessWidget {
-  const StatCard({super.key, required this.title, required this.value, required this.icon, required this.color});
-  final String title, value; final IconData icon; final Color color;
-  @override
-  Widget build(BuildContext context) => SizedBox(width: 230, child: Card(child: Padding(padding: const EdgeInsets.all(16), child: Row(children: [
-    CircleAvatar(backgroundColor: color.withValues(alpha: .12), child: Icon(icon, color: color)),
-    const SizedBox(width: 12), Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Text(title, style: const TextStyle(color: Colors.black54)), const SizedBox(height: 5), Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 19)),
-    ])),
-  ]))));
-}
 
 Future<void> showMessage(BuildContext context, String message) async {
   if (!context.mounted) return;
@@ -584,64 +623,276 @@ class _FamiliesPageState extends State<FamiliesPage> {
 class ServicesPage extends StatefulWidget { const ServicesPage({super.key}); @override State<ServicesPage> createState() => _ServicesPageState(); }
 class _ServicesPageState extends State<ServicesPage> {
   Future<void> add() async => showFormDialog(context, 'Ajouter un culte ou une réunion', [
-    const FieldSpec('title', 'Nom du service', required: true), FieldSpec('service_date', 'Date (AAAA-MM-JJ)', required: true, initial: today()), const FieldSpec('notes', 'Notes'),
-  ], (v) async { await AppDatabase.instance.insert('services', v); await AppDatabase.instance.log('CREATE_SERVICE', v['title'] ?? ''); if (mounted) setState(() {}); });
+    const FieldSpec('title', 'Nom du service (ex. Culte du dimanche)', required: true),
+    FieldSpec('service_date', 'Date (AAAA-MM-JJ)', required: true, initial: today()),
+    const FieldSpec('start_time', 'Heure de début (HH:mm)', required: true, initial: '09:00'),
+    const FieldSpec('notes', 'Notes'),
+  ], (v) async {
+    if (!RegExp(r'^([01]?\d|2[0-3]):[0-5]\d$').hasMatch(v['start_time'] ?? '')) { if (mounted) showMessage(context, 'Heure invalide : utilisez le format HH:mm, par exemple 09:00.'); return; }
+    if (DateTime.tryParse(v['service_date'] ?? '') == null) { if (mounted) showMessage(context, 'Date invalide : utilisez AAAA-MM-JJ.'); return; }
+    await AppDatabase.instance.insert('services', v);
+    await AppDatabase.instance.log('CREATE_SERVICE', v['title'] ?? '');
+    if (mounted) setState(() {});
+  });
   @override
   Widget build(BuildContext context) => Scaffold(backgroundColor: Colors.transparent, floatingActionButton: FloatingActionButton.extended(onPressed: add, icon: const Icon(Icons.add), label: const Text('Ajouter service')),
-    body: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('services', orderBy: 'service_date DESC'), builder: (context, snap) {
+    body: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('services', orderBy: 'service_date DESC, id DESC'), builder: (context, snap) {
       if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-      if (snap.data!.isEmpty) return const Center(child: Text('Aucun culte ou réunion enregistré.'));
+      if (snap.data!.isEmpty) return const EmptyState(icon: Icons.church_outlined, message: 'Aucun culte ou réunion enregistré.\nAjoutez-en un pour pouvoir noter les présences.');
       return ListView(
-        padding: const EdgeInsets.all(12),
-        children: snap.data!.map((r) {
-          return Card(
+        padding: const EdgeInsets.all(14),
+        children: [
+          const PageHeader(title: 'Cultes et réunions', subtitle: 'Chaque service sert de base aux présences et à la persévérance.'),
+          ...snap.data!.map((r) => Card(
             child: ListTile(
-              leading: const Icon(Icons.church, color: navy),
-              title: Text('${r['title']}'),
-              subtitle: Text('${r['service_date']} — ${r['notes']}'),
+              leading: const Icon(Icons.church, color: MbbColors.blue),
+              title: Text('${r['title']}', style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Text('${r['service_date']} à ${('${r['start_time']}').isEmpty ? '—' : r['start_time']}${('${r['notes']}').isEmpty ? '' : ' — ${r['notes']}'}'),
               trailing: IconButton(
                 icon: const Icon(Icons.delete_outline),
                 onPressed: () async {
-                  if (await confirmDelete(context, '${r['title']}')) {
-                    await AppDatabase.instance.delete(
-                      'services', where: 'id = ?', whereArgs: [r['id']],
-                    );
+                  if (await confirmDelete(context, '${r['title']} du ${r['service_date']} et ses présences')) {
+                    await AppDatabase.instance.delete('attendance', where: 'service_id = ?', whereArgs: [r['id']]);
+                    await AppDatabase.instance.delete('services', where: 'id = ?', whereArgs: [r['id']]);
                     if (mounted) setState(() {});
                   }
                 },
               ),
             ),
-          );
-        }).toList(),
+          )),
+        ],
       );
     }));
 }
 
+class _AttData {
+  _AttData(this.services, this.members, this.byMember, this.grace);
+  final List<Map<String, Object?>> services, members;
+  final Map<int, Map<String, Object?>> byMember;
+  final int grace;
+}
+
 class AttendancePage extends StatefulWidget { const AttendancePage({super.key}); @override State<AttendancePage> createState() => _AttendancePageState(); }
 class _AttendancePageState extends State<AttendancePage> {
-  String selectedDate = today();
-  Future<void> mark(Map<String, Object?> member, String status) async {
+  int? serviceId;
+  Future<_AttData> _load() async {
     final db = AppDatabase.instance;
-    final existing = await db.query('attendance', where: 'member_id = ? AND service_date = ?', whereArgs: [member['id'], selectedDate]);
-    final values = {'member_id': member['id'], 'service_date': selectedDate, 'status': status, 'created_at': nowIso()};
+    final services = await db.query('services', orderBy: 'service_date DESC, id DESC');
+    if (serviceId == null || !services.any((s) => s['id'] == serviceId)) serviceId = services.isEmpty ? null : services.first['id'] as int;
+    final members = await db.query('members', where: 'status = ?', whereArgs: ['Actif'], orderBy: 'last_name COLLATE NOCASE, first_name COLLATE NOCASE');
+    final att = serviceId == null ? <Map<String, Object?>>[] : await db.query('attendance', where: 'service_id = ?', whereArgs: [serviceId]);
+    final grace = int.tryParse(await db.setting('late_after_minutes', '15')) ?? 15;
+    return _AttData(services, members, {for (final a in att) a['member_id'] as int: a}, grace);
+  }
+
+  Future<void> _save(Map<String, Object?> member, Map<String, Object?> service, String status, String time) async {
+    final db = AppDatabase.instance;
+    final existing = await db.query('attendance', where: 'member_id = ? AND service_id = ?', whereArgs: [member['id'], service['id']]);
+    final values = {'member_id': member['id'], 'service_id': service['id'], 'service_date': service['service_date'], 'status': status, 'check_in_time': time, 'created_at': nowIso()};
     if (existing.isEmpty) { await db.insert('attendance', values); } else { await db.update('attendance', values, where: 'id = ?', whereArgs: [existing.first['id']]); }
-    await db.log('MARK_ATTENDANCE', '${member['id']} $status $selectedDate');
+    await db.log('MARK_ATTENDANCE', '${member['id']} $status ${service['service_date']} ${service['title']}');
+  }
+
+  /// `auto` : l'heure d'arrivée (maintenant) décide entre Présent et Retard.
+  Future<void> mark(Map<String, Object?> member, Map<String, Object?> service, int grace, String choice) async {
+    var status = choice; var time = '';
+    if (choice == 'auto') {
+      if ('${service['service_date']}' != today()) { showMessage(context, 'L’arrivée automatique ne fonctionne que le jour du service. Choisissez Présent, Retard ou Absent.'); return; }
+      time = formatHm(DateTime.now());
+      status = classifyArrival(startTime: '${service['start_time']}', graceMinutes: grace, arrivalTime: time);
+    }
+    await _save(member, service, status, time);
+    if (!mounted) return;
+    setState(() {});
+    if (choice == 'auto') showMessage(context, '${member['first_name']} ${member['last_name']} : $status (arrivée $time)');
+  }
+
+  Future<void> markRemainingAbsent(_AttData d, Map<String, Object?> service) async {
+    final missing = d.members.where((m) => !d.byMember.containsKey(m['id'])).toList();
+    if (missing.isEmpty) { showMessage(context, 'Tous les membres sont déjà marqués.'); return; }
+    final ok = await showDialog<bool>(context: context, builder: (c) => AlertDialog(
+      title: const Text('Marquer les restants absents ?'),
+      content: Text('${missing.length} membre(s) non marqué(s) seront enregistrés comme absents pour « ${service['title']} ».'),
+      actions: [TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Annuler')), FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Confirmer'))],
+    ));
+    if (ok != true) return;
+    for (final m in missing) { await _save(m, service, statusAbsent, ''); }
     if (mounted) setState(() {});
   }
+
+  Color _color(String s) => s == statusPresent ? MbbColors.success : s == statusLate ? MbbColors.warning : MbbColors.danger;
+
   @override
-  Widget build(BuildContext context) => Column(children: [
-    Padding(padding: const EdgeInsets.all(16), child: TextFormField(initialValue: selectedDate, decoration: const InputDecoration(labelText: 'Date du culte (AAAA-MM-JJ)', prefixIcon: Icon(Icons.calendar_month)), onChanged: (v) => setState(() => selectedDate = v.trim()))),
-    Expanded(child: FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('members', where: 'status = ?', whereArgs: ['Actif'], orderBy: 'last_name'), builder: (context, snap) {
-      if (!snap.hasData) return const Center(child: CircularProgressIndicator());
-      if (snap.data!.isEmpty) return const Center(child: Text('Ajoutez d’abord des membres.'));
-      return ListView(children: snap.data!.map((m) => FutureBuilder<List<Map<String, Object?>>>(future: AppDatabase.instance.query('attendance', where: 'member_id = ? AND service_date = ?', whereArgs: [m['id'], selectedDate]), builder: (context, aSnap) {
-        final current = aSnap.data?.isNotEmpty == true ? '${aSnap.data!.first['status']}' : 'Non marqué';
-        return Card(child: ListTile(title: Text('${m['first_name']} ${m['last_name']}'), subtitle: Text('Statut : $current'), trailing: PopupMenuButton<String>(tooltip: 'Enregistrer présence', onSelected: (v) => mark(m, v), itemBuilder: (_) => const [
-          PopupMenuItem(value: 'Présent', child: Text('Présent')), PopupMenuItem(value: 'Absent', child: Text('Absent')), PopupMenuItem(value: 'Retard', child: Text('Retard')),
-        ])));
-      })).toList());
-    })),
-  ]);
+  Widget build(BuildContext context) => FutureBuilder<_AttData>(future: _load(), builder: (context, snap) {
+    if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+    final d = snap.data!;
+    if (d.services.isEmpty) return const EmptyState(icon: Icons.fact_check_outlined, message: 'Créez d’abord un culte ou une réunion\ndans « Cultes et réunions ».');
+    final service = d.services.firstWhere((s) => s['id'] == serviceId);
+    int count(String st) => d.byMember.values.where((a) => a['status'] == st).length;
+    final marked = d.members.where((m) => d.byMember.containsKey(m['id'])).length;
+    return ListView(padding: const EdgeInsets.all(14), children: [
+      PageHeader(title: 'Présences', subtitle: 'Arrivée automatique : retard après ${service['start_time']} + ${d.grace} min (réglable dans Paramètres). 2 retards = 1 présence.'),
+      DropdownButtonFormField<int>(
+        key: ValueKey(serviceId), initialValue: serviceId, isExpanded: true,
+        decoration: const InputDecoration(labelText: 'Service', prefixIcon: Icon(Icons.church_outlined)),
+        items: [for (final sv in d.services) DropdownMenuItem(value: sv['id'] as int, child: Text('${sv['service_date']} — ${sv['title']} (${sv['start_time']})', overflow: TextOverflow.ellipsis))],
+        onChanged: (v) => setState(() => serviceId = v),
+      ),
+      const SizedBox(height: 10),
+      Wrap(spacing: 8, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+        StatusChip('Présents ${count(statusPresent)}', MbbColors.success),
+        StatusChip('Retards ${count(statusLate)}', MbbColors.warning),
+        StatusChip('Absents ${count(statusAbsent)}', MbbColors.danger),
+        StatusChip('Non marqués ${d.members.length - marked}', MbbColors.muted),
+        OutlinedButton.icon(onPressed: () => markRemainingAbsent(d, service), icon: const Icon(Icons.person_off_outlined), label: const Text('Restants absents')),
+      ]),
+      const SizedBox(height: 6),
+      if (d.members.isEmpty) const Padding(padding: EdgeInsets.all(24), child: EmptyState(icon: Icons.people_outline, message: 'Ajoutez d’abord des membres.')),
+      ...d.members.map((m) {
+        final a = d.byMember[m['id']];
+        final st = a == null ? null : '${a['status']}';
+        final t = a == null ? '' : '${a['check_in_time']}';
+        return Card(child: ListTile(
+          title: Text('${m['first_name']} ${m['last_name']}', style: const TextStyle(fontWeight: FontWeight.w600)),
+          subtitle: Padding(padding: const EdgeInsets.only(top: 4), child: Align(alignment: Alignment.centerLeft, child: st == null ? const StatusChip('Non marqué', MbbColors.muted) : StatusChip(t.isEmpty ? st : '$st · $t', _color(st)))),
+          trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+            IconButton(tooltip: 'Arrivée maintenant (statut automatique)', icon: const Icon(Icons.how_to_reg, color: MbbColors.blue), onPressed: () => mark(m, service, d.grace, 'auto')),
+            PopupMenuButton<String>(tooltip: 'Choisir manuellement', onSelected: (v) => mark(m, service, d.grace, v), itemBuilder: (_) => const [
+              PopupMenuItem(value: statusPresent, child: Text('Présent')), PopupMenuItem(value: statusLate, child: Text('Retard')), PopupMenuItem(value: statusAbsent, child: Text('Absent')),
+            ]),
+          ]),
+        ));
+      }),
+    ]);
+  });
+}
+
+class PerseverancePage extends StatefulWidget { const PerseverancePage({super.key}); @override State<PerseverancePage> createState() => _PerseverancePageState(); }
+class _PerseverancePageState extends State<PerseverancePage> {
+  PeriodKind kind = PeriodKind.monthly;
+  DateTime anchor = DateTime.now();
+  String? serviceName; // null = total de tous les services
+
+  ReportPeriod get period => switch (kind) {
+    PeriodKind.weekly => ReportPeriod.weekOf(anchor),
+    PeriodKind.yearly => ReportPeriod.year(anchor.year),
+    _ => ReportPeriod.month(anchor.year, anchor.month),
+  };
+  void shift(int dir) => setState(() {
+    anchor = switch (kind) {
+      PeriodKind.weekly => DateTime(anchor.year, anchor.month, anchor.day + 7 * dir),
+      PeriodKind.yearly => DateTime(anchor.year + dir, 1, 1),
+      _ => DateTime(anchor.year, anchor.month + dir, 1),
+    };
+  });
+
+  Future<({List<AttendanceEntry> entries, Map<int, String> members})> _load() async {
+    final db = AppDatabase.instance;
+    final rows = await db.rawQuery("SELECT a.member_id, a.service_date, a.status, COALESCE(s.title, 'Sans service') AS title FROM attendance a LEFT JOIN services s ON s.id = a.service_id");
+    final members = await db.query('members', where: 'status = ?', whereArgs: ['Actif']);
+    return (
+      entries: [for (final r in rows) AttendanceEntry(memberId: r['member_id'] as int, serviceName: '${r['title']}', dateIso: '${r['service_date']}', status: '${r['status']}')],
+      members: {for (final m in members) m['id'] as int: '${m['first_name']} ${m['last_name']}'.trim()},
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder(future: _load(), builder: (context, snap) {
+    if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+    final data = snap.data!;
+    final names = PerseveranceCalculator.serviceNames(data.entries);
+    final per = period;
+    final total = PerseveranceCalculator.rank(entries: data.entries, members: data.members, period: per);
+    final shown = serviceName == null ? total : PerseveranceCalculator.rank(entries: data.entries, members: data.members, period: per, serviceName: serviceName);
+    return ListView(padding: const EdgeInsets.all(14), children: [
+      const PageHeader(title: 'Persévérance', subtitle: 'Classement par présences : 001 = le plus assidu. 2 retards comptent pour 1 présence.'),
+      SegmentedButton<PeriodKind>(
+        showSelectedIcon: false,
+        segments: const [ButtonSegment(value: PeriodKind.weekly, label: Text('Semaine')), ButtonSegment(value: PeriodKind.monthly, label: Text('Mois')), ButtonSegment(value: PeriodKind.yearly, label: Text('Année'))],
+        selected: {kind == PeriodKind.weekly || kind == PeriodKind.yearly ? kind : PeriodKind.monthly},
+        onSelectionChanged: (v) => setState(() => kind = v.first),
+      ),
+      Row(children: [
+        IconButton(onPressed: () => shift(-1), icon: const Icon(Icons.chevron_left)),
+        Expanded(child: Text(per.label, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16))),
+        IconButton(onPressed: () => shift(1), icon: const Icon(Icons.chevron_right)),
+      ]),
+      SectionCard(title: 'Totaux par service', icon: Icons.summarize_outlined, child: Column(children: [
+        for (final n in names) () {
+          final b = PerseveranceCalculator.rank(entries: data.entries, members: data.members, period: per, serviceName: n);
+          return _totalRow(n, b);
+        }(),
+        const Divider(),
+        _totalRow('TOTAL GÉNÉRAL', total, bold: true),
+      ])),
+      const SizedBox(height: 6),
+      Wrap(spacing: 8, children: [
+        ChoiceChip(label: const Text('Tous les services'), selected: serviceName == null, onSelected: (_) => setState(() => serviceName = null)),
+        for (final n in names) ChoiceChip(label: Text(n), selected: serviceName == n, onSelected: (_) => setState(() => serviceName = n)),
+      ]),
+      const SizedBox(height: 8),
+      if (data.members.isEmpty) const EmptyState(icon: Icons.people_outline, message: 'Aucun membre actif.'),
+      ...shown.ranking.map((m) => Card(child: ListTile(
+        leading: Container(width: 54, padding: const EdgeInsets.symmetric(vertical: 8), decoration: BoxDecoration(color: m.rank <= 3 ? MbbColors.blue : MbbColors.sky, borderRadius: BorderRadius.circular(10)), child: Text(m.rankLabel, textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, color: m.rank <= 3 ? Colors.white : MbbColors.deep))),
+        title: Text(m.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text('Présences ${m.presents} · Retards ${m.lates} · Absences ${m.absents}'),
+        trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [Text('${m.score}', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18)), const Text('points', style: TextStyle(fontSize: 11, color: MbbColors.muted))]),
+      ))),
+    ]);
+  });
+
+  Widget _totalRow(String label, PerseveranceBoard b, {bool bold = false}) {
+    final st = TextStyle(fontWeight: bold ? FontWeight.w800 : FontWeight.w500);
+    return Padding(padding: const EdgeInsets.symmetric(vertical: 5), child: Row(children: [
+      Expanded(flex: 3, child: Text(label, style: st)),
+      Expanded(flex: 4, child: Text('P ${b.totalPresents} · R ${b.totalLates} · A ${b.totalAbsents}', style: st)),
+      Text('${b.totalScore} pts', style: st),
+    ]));
+  }
+}
+
+class ReportsPage extends StatelessWidget {
+  const ReportsPage({super.key});
+  Future<FamilyReport> _load() async {
+    final db = AppDatabase.instance;
+    final families = await db.query('families', orderBy: 'name COLLATE NOCASE');
+    final members = await db.query('members');
+    return FamilyReportBuilder.build(families, members);
+  }
+  @override
+  Widget build(BuildContext context) => FutureBuilder<FamilyReport>(future: _load(), builder: (context, snap) {
+    if (!snap.hasData) return const Center(child: CircularProgressIndicator());
+    final r = snap.data!;
+    return ListView(padding: const EdgeInsets.all(14), children: [
+      const PageHeader(title: 'Rapport des familles', subtitle: 'Toutes les familles et tous leurs membres, calculés à partir des données enregistrées.'),
+      Wrap(spacing: 12, runSpacing: 12, children: [
+        StatCard(title: 'Familles', value: '${r.totalFamilies}', icon: Icons.family_restroom, color: MbbColors.blue),
+        StatCard(title: 'Membres au total', value: '${r.totalMembers}', icon: Icons.people, color: MbbColors.deep),
+        StatCard(title: 'Membres sans famille', value: '${r.unassigned.length}', icon: Icons.person_outline, color: MbbColors.accent),
+      ]),
+      const SizedBox(height: 12),
+      if (r.families.isEmpty) const EmptyState(icon: Icons.family_restroom, message: 'Aucune famille enregistrée.'),
+      ...r.families.map((f) => Card(child: ExpansionTile(
+        shape: const Border(), collapsedShape: const Border(),
+        leading: const Icon(Icons.home_outlined, color: MbbColors.blue),
+        title: Text('Famille ${f.name}', style: const TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text('${f.members.length} membre(s)${f.address.isEmpty ? '' : ' · ${f.address}'}'),
+        children: [
+          if (f.members.isEmpty) const ListTile(title: Text('Aucun membre rattaché.')),
+          for (final m in f.members) ListTile(dense: true, leading: const Icon(Icons.person_outline), title: Text(m.name), subtitle: Text([if (m.churchRole.isNotEmpty) m.churchRole, if (m.phone.isNotEmpty) m.phone, m.status].join(' · '))),
+        ],
+      ))),
+      if (r.unassigned.isNotEmpty) Card(child: ExpansionTile(
+        shape: const Border(), collapsedShape: const Border(),
+        leading: const Icon(Icons.person_search_outlined, color: MbbColors.muted),
+        title: const Text('Membres sans famille', style: TextStyle(fontWeight: FontWeight.w700)),
+        subtitle: Text('${r.unassigned.length} membre(s)'),
+        children: [for (final m in r.unassigned) ListTile(dense: true, leading: const Icon(Icons.person_outline), title: Text(m.name), subtitle: Text(m.status))],
+      )),
+      const SizedBox(height: 8),
+      const Text('Export PDF / Excel / Word : pas encore disponible.', style: TextStyle(color: MbbColors.muted, fontSize: 12)),
+    ]);
+  });
 }
 
 class FinancePage extends StatefulWidget { const FinancePage({super.key, required this.principal}); final Principal principal; @override State<FinancePage> createState() => _FinancePageState(); }
@@ -678,17 +929,20 @@ class _FinancePageState extends State<FinancePage> {
 
 class SettingsPage extends StatefulWidget { const SettingsPage({super.key}); @override State<SettingsPage> createState() => _SettingsPageState(); }
 class _SettingsPageState extends State<SettingsPage> {
-  final church = TextEditingController(); final app = TextEditingController(); String language = 'Français';
+  final church = TextEditingController(); final app = TextEditingController(); final lateMinutes = TextEditingController(text: '15'); String language = 'Français';
+  bool get isCards => AppDatabase.activeBureau == Bureau.cartesAnnonces;
   @override void initState() { super.initState(); _load(); }
   Future<void> _load() async {
     final rows = await AppDatabase.instance.query('app_settings');
     final values = {for (final r in rows) '${r['key']}': '${r['value']}'};
-    church.text = values['church_name'] ?? 'Mission Baptiste Béraca'; app.text = values['app_name'] ?? 'MBB'; language = values['language'] ?? 'Français';
+    church.text = values['church_name'] ?? 'Mission Baptiste Béraca'; app.text = values['app_name'] ?? 'MBB'; language = values['language'] ?? 'Français'; lateMinutes.text = values['late_after_minutes'] ?? '15';
     if (mounted) setState(() {});
   }
   Future<void> _save() async {
     final db = AppDatabase.instance;
-    for (final entry in {'church_name': church.text.trim(), 'app_name': app.text.trim(), 'language': language}.entries) {
+    final minutes = int.tryParse(lateMinutes.text.trim());
+    if (isCards && (minutes == null || minutes < 0 || minutes > 180)) { showMessage(context, 'La tolérance de retard doit être un nombre de minutes entre 0 et 180.'); return; }
+    for (final entry in {'church_name': church.text.trim(), 'app_name': app.text.trim(), 'language': language, if (isCards) 'late_after_minutes': '$minutes'}.entries) {
       final rows = await db.query('app_settings', where: 'key = ?', whereArgs: [entry.key]);
       if (rows.isEmpty) { await db.insert('app_settings', {'key': entry.key, 'value': entry.value}); }
       else { await db.update('app_settings', {'value': entry.value}, where: 'key = ?', whereArgs: [entry.key]); }
@@ -697,7 +951,7 @@ class _SettingsPageState extends State<SettingsPage> {
     if (mounted) showMessage(context, 'Paramètres enregistrés. Le titre affiché dans l’en-tête sera actualisé au prochain lancement.');
   }
   @override
-  void dispose() { church.dispose(); app.dispose(); super.dispose(); }
+  void dispose() { church.dispose(); app.dispose(); lateMinutes.dispose(); super.dispose(); }
   @override
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(18), children: [
     Text('Configuration', style: Theme.of(context).textTheme.headlineMedium),
@@ -705,6 +959,7 @@ class _SettingsPageState extends State<SettingsPage> {
     const DeviceRoleCard(),
     const SizedBox(height: 16),
     TextField(controller: church, decoration: const InputDecoration(labelText: 'Nom de l’église')),
+    if (isCards) ...[const SizedBox(height: 12), TextField(controller: lateMinutes, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Tolérance avant retard (minutes après l’heure de début du service)', helperText: 'Au-delà, l’arrivée est enregistrée comme « Retard ». 2 retards comptent pour 1 présence.', prefixIcon: Icon(Icons.timer_outlined)))],
     const SizedBox(height: 12), TextField(controller: app, decoration: const InputDecoration(labelText: 'Nom de l’application affiché dans les paramètres')),
     const SizedBox(height: 12), DropdownButtonFormField<String>(initialValue: language, decoration: const InputDecoration(labelText: 'Langue de l’interface'), items: const [DropdownMenuItem(value: 'Français', child: Text('Français')), DropdownMenuItem(value: 'Kreyòl ayisyen', child: Text('Kreyòl ayisyen'))], onChanged: (v) { if (v != null) setState(() => language = v); }),
     const SizedBox(height: 16), FilledButton.icon(onPressed: _save, icon: const Icon(Icons.save), label: const Text('Enregistrer')),
@@ -749,8 +1004,8 @@ class BackupPage extends StatelessWidget {
   }
   Future<void> _export(BuildContext context) async {
     try {
-      final dbPath = await _databasePath();
-      final result = await FilePicker.platform.saveFile(dialogTitle: 'Enregistrer la sauvegarde MBB', fileName: 'MBB_backup_${today()}.db', type: FileType.custom, allowedExtensions: ['db']);
+      final dbPath = await AppDatabase.instance.filePath();
+      final result = await FilePicker.platform.saveFile(dialogTitle: 'Enregistrer la sauvegarde MBB', fileName: 'MBB_${AppDatabase.instance.bureau == Bureau.comptabilite ? 'Comptabilite' : 'Cartes_Annonces'}_${today()}.db', type: FileType.custom, allowedExtensions: ['db']);
       if (result == null) return;
       await File(dbPath).copy(result);
       await AppDatabase.instance.log('BACKUP_EXPORT', result);
@@ -768,9 +1023,9 @@ class BackupPage extends StatelessWidget {
       ]));
       if (confirm != true) return;
       final source = File(picked.files.single.path!);
-      final problem = await AppDatabase.validateBackupFile(source.path);
+      final problem = await AppDatabase.validateBackupFile(source.path, principal.bureau);
       if (problem != null) { if (context.mounted) showMessage(context, problem); return; }
-      final destination = await _databasePath();
+      final destination = await AppDatabase.instance.filePath();
       // Copie de sécurité automatique AVANT tout remplacement.
       final safetyDir = Directory(p.join(p.dirname(destination), 'sauvegardes_auto'));
       await safetyDir.create(recursive: true);
@@ -802,7 +1057,7 @@ class BackupPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => ListView(padding: const EdgeInsets.all(18), children: [
     Text('Sauvegarde et transfert', style: Theme.of(context).textTheme.headlineMedium),
-    const SizedBox(height: 8), const Text('Le fichier .db contient la base SQLite de l’application. Conservez-le dans un endroit sûr.'),
+    const SizedBox(height: 8), const Text('Le fichier .db contient la base SQLite de votre bureau uniquement. Conservez-le dans un endroit sûr.'),
     const SizedBox(height: 16),
     Card(child: ListTile(leading: const Icon(Icons.upload_file, color: teal), title: const Text('Exporter la base de données'), subtitle: const Text('Créer une copie complète de la base SQLite.'), trailing: const Icon(Icons.chevron_right), onTap: () => _export(context))),
     Card(child: ListTile(leading: const Icon(Icons.restore, color: navy), title: const Text('Restaurer une base de données'), subtitle: const Text('Remplacer la base locale à partir d’un fichier .db.'), trailing: const Icon(Icons.chevron_right), onTap: () => _import(context))),
@@ -813,13 +1068,8 @@ class BackupPage extends StatelessWidget {
       Card(child: ListTile(leading: const Icon(Icons.download_for_offline, color: navy), title: const Text('Importer la comptabilité (JSON)'), subtitle: const Text('Ajoute seulement les opérations nouvelles, avec résumé avant confirmation.'), trailing: const Icon(Icons.chevron_right), onTap: () => _importFinance(context))),
     ],
     const SizedBox(height: 12),
-    const Card(child: ListTile(leading: Icon(Icons.warning_amber, color: Colors.orange), title: Text('Important'), subtitle: Text('Cette sauvegarde contient les données des DEUX bureaux (une seule base locale) et n’est pas chiffrée : ne la confiez qu’à une personne autorisée. Une exportation séparée par bureau reste à développer. Le système de comptes et permissions avancées reste à compléter avant un usage sensible en production.'))),
+    const Card(child: ListTile(leading: Icon(Icons.warning_amber, color: Colors.orange), title: Text('Important'), subtitle: Text('Cette sauvegarde ne contient QUE les données de votre bureau (chaque bureau a sa propre base). Elle n’est pas chiffrée : ne la confiez qu’à une personne autorisée. Le système de comptes et permissions avancées reste à compléter avant un usage sensible en production.'))),
   ]);
-}
-
-Future<String> _databasePath() async {
-  final dir = await getApplicationSupportDirectory();
-  return p.join(dir.path, 'mbb_database.db');
 }
 
 Future<bool> confirmDelete(BuildContext context, String item) async =>
