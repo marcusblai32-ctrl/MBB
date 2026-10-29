@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../core/permissions.dart';
 import '../database/app_database.dart';
@@ -31,7 +30,7 @@ class FinanceExchange {
   const FinanceExchange._();
 
   static Future<List<ExchangeTx>> _existing() async {
-    final rows = await AppDatabase.instance.query('transactions');
+    final rows = await AppDatabase.accounting.query('transactions');
     final out = <ExchangeTx>[];
     for (final r in rows) {
       final cents = ((r['amount'] as num) * 100).round();
@@ -53,7 +52,7 @@ class FinanceExchange {
 
   static Future<FinanceExportResult> export(Principal actor) async {
     AccessPolicy.require(actor, Permission.financeExport);
-    final all = await AppDatabase.instance.query('transactions');
+    final all = await AppDatabase.accounting.query('transactions');
     final list = await _existing();
     final env = buildEnvelope(
       bureau: Bureau.comptabilite.folder,
@@ -61,7 +60,7 @@ class FinanceExchange {
       appVersion: _appVersion,
       data: {'transactions': [for (final t in list) t.toJson()]},
     );
-    await AppDatabase.instance.log('EXPORT_FINANCE', '${list.length} opérations', username: actor.username);
+    await AppDatabase.accounting.log('EXPORT_FINANCE', '${list.length} opérations', username: actor.username);
     return FinanceExportResult(jsonEncode(env), list.length, all.length - list.length);
   }
 
@@ -84,14 +83,14 @@ class FinanceExchange {
     if (AppDatabase.readOnly) throw ReadOnlyDeviceException();
     final supported = plan.toAdd.where((t) => !t.voided).toList();
     if (supported.isEmpty) return 0;
-    final dir = await getApplicationSupportDirectory();
-    final safetyDir = Directory(p.join(dir.path, 'sauvegardes_auto'));
+    final dirPath = await AppDatabase.directoryPath();
+    final safetyDir = Directory(p.join(dirPath, 'sauvegardes_auto'));
     await safetyDir.create(recursive: true);
-    final src = File(p.join(dir.path, 'mbb_database.db'));
+    final src = File(await AppDatabase.accounting.filePath());
     if (await src.exists()) {
       await src.copy(p.join(safetyDir.path, 'avant_import_${DateTime.now().millisecondsSinceEpoch}.db'));
     }
-    final db = await AppDatabase.instance.database;
+    final db = await AppDatabase.accounting.database;
     final now = DateTime.now().toIso8601String();
     await db.transaction((txn) async {
       for (final t in supported) {
@@ -108,7 +107,7 @@ class FinanceExchange {
         });
       }
     });
-    await AppDatabase.instance.log('IMPORT_FINANCE', '${supported.length} opérations ajoutées', username: actor.username);
+    await AppDatabase.accounting.log('IMPORT_FINANCE', '${supported.length} opérations ajoutées', username: actor.username);
     return supported.length;
   }
 }
